@@ -81,6 +81,7 @@ QFrame#Card {
 QLabel#CardLabel { font-weight: 600; font-size: 13px; }
 QLabel#CardValue { color: #7f8f81; font-size: 11px; }
 QLabel#CardGrip { color: #3fce74; font-size: 14px; }
+QLabel#CardInv { color: #f0a35e; font-size: 13px; font-weight: 700; }
 QToolButton#CardMenu { border: none; color: #3fce74; font-size: 16px; padding: 0 4px; }
 QToolButton#CardMenu:hover { color: #7dffab; }
 

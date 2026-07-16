@@ -138,6 +138,8 @@ class AppCore:
         try:
             if ptype == "Bool":
                 value = bool(value)
+                if control.get("invert"):
+                    value = not value  # control shows/receives the flipped state
             elif ptype in ("Int", "Float"):
                 value = float(value)
                 lo, hi = control.get("min"), control.get("max")
@@ -165,7 +167,7 @@ class AppCore:
 
     def add_control(self, param: str, kind: str, label: Optional[str] = None,
                     vmin: Optional[float] = None, vmax: Optional[float] = None,
-                    category: Optional[str] = None) -> Optional[dict]:
+                    category: Optional[str] = None, invert: bool = False) -> Optional[dict]:
         if kind not in CONTROL_KINDS:
             return None
         with self._lock:
@@ -187,6 +189,8 @@ class AppCore:
             if kind in ("slider", "int"):
                 control["min"] = vmin if vmin is not None else 0
                 control["max"] = vmax if vmax is not None else (1 if kind == "slider" else 255)
+            if ptype == "Bool" and invert:
+                control["invert"] = True
             self.board["controls"].append(control)
             self.store.save_board(self.board)
         self._emit_board()
@@ -197,7 +201,7 @@ class AppCore:
             control = next((c for c in self.board["controls"] if c["id"] == control_id), None)
             if not control:
                 return False
-            for key in ("label", "min", "max", "kind"):
+            for key in ("label", "min", "max", "kind", "invert"):
                 if key in changes and changes[key] is not None:
                     control[key] = changes[key]
             self.store.save_board(self.board)

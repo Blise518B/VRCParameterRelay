@@ -50,6 +50,12 @@ class ControlDialog(QDialog):
                 self.cat_combo.addItem(cat.get("name") or "Category", cat["id"])
             form.addRow("Category", self.cat_combo)
 
+        self.invert_check: Optional[QCheckBox] = None
+        if ptype == "Bool":
+            self.invert_check = QCheckBox("Invert — ON sends the parameter OFF (and vice versa)")
+            self.invert_check.setChecked(bool((existing or {}).get("invert")))
+            form.addRow("", self.invert_check)
+
         self.min_spin = QDoubleSpinBox(decimals=2, minimum=-9999, maximum=9999)
         self.max_spin = QDoubleSpinBox(decimals=2, minimum=-9999, maximum=9999)
         self.min_spin.setValue(float((existing or {}).get("min", 0)))
@@ -78,6 +84,8 @@ class ControlDialog(QDialog):
             out["max"] = self.max_spin.value()
         if self.cat_combo is not None:
             out["category"] = self.cat_combo.currentData()
+        if self.invert_check is not None:
+            out["invert"] = self.invert_check.isChecked()
         return out
 
 

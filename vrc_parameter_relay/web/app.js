@@ -306,16 +306,17 @@ function buildCard(c, locked) {
   const val = values[c.param];
 
   if (c.kind === "toggle") {
+    const inv = !!c.invert; // shown state = parameter value XOR invert
     const btn = document.createElement("button");
-    btn.className = "switch" + (val ? " on" : "");
+    btn.className = "switch" + ((inv ? !val : !!val) ? " on" : "");
     btn.setAttribute("aria-label", c.label);
     btn.onclick = () => {
       const on = !btn.classList.contains("on");
       btn.classList.toggle("on", on);
-      send(c.id, on);
+      send(c.id, on); // server flips it for inverted controls
     };
     card.appendChild(btn);
-    cards.set(c.id, (v) => btn.classList.toggle("on", !!v));
+    cards.set(c.id, (v) => btn.classList.toggle("on", inv ? !v : !!v));
 
   } else if (c.kind === "button") {
     const btn = document.createElement("button");

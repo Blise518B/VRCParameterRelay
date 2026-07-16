@@ -47,7 +47,7 @@ def seed(core) -> None:
     core.rename_category(cats[2]["id"], "Sliders")
     core.add_control("Hoodie", "toggle", "Shirt", category=cats[0]["id"])
     core.add_control("Hat", "toggle", "Hat", category=cats[0]["id"])
-    core.add_control("TailWag", "toggle", "Gloves", category=cats[0]["id"])
+    core.add_control("TailWag", "toggle", "Gloves (inv)", category=cats[0]["id"], invert=True)
     core.add_control("GlowToggle", "toggle", "Nude", category=cats[1]["id"])
     core.add_control("Brightness", "slider", "Brightness", 0, 1, category=cats[2]["id"])
     core.add_control("OutfitIndex", "int", "Outfit", 0, 5, category=cats[2]["id"])

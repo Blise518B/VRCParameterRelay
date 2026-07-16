@@ -76,6 +76,18 @@ def main() -> None:
     check("guest works after unlock",
           core.set_control_value(hoodie["id"], True, source="guest"))
 
+    # inverted toggles: shown state is flipped, server sends the real value
+    inv = core.add_control("TailWag", "toggle", "NoWag", invert=True)
+    check("invert stored on control", inv.get("invert") is True)
+    link.sent.clear()
+    check("inverted set accepted", core.set_control_value(inv["id"], True))
+    check("shown ON sent the parameter OFF", link.sent == [("TailWag", "Bool", False)])
+    check("edit can clear invert", core.update_control(inv["id"], invert=False))
+    link.sent.clear()
+    core.set_control_value(inv["id"], True)
+    check("non-inverted after edit", link.sent == [("TailWag", "Bool", True)])
+    check("cleanup inverted control", core.remove_control(inv["id"]))
+
     # persistence round trip (fresh Store to force re-read from disk)
     reloaded = Store().load_board(AVATAR)
     check("categories persisted", len(reloaded["categories"]) == 5)

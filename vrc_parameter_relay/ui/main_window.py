@@ -398,7 +398,8 @@ class MainWindow(QMainWindow):
             spec = dlg.result_dict()
             self.core.add_control(name, spec.pop("kind"), spec.get("label"),
                                   spec.get("min"), spec.get("max"),
-                                  category=spec.get("category"))
+                                  category=spec.get("category"),
+                                  invert=spec.get("invert", False))
 
     # -- sharing ------------------------------------------------------------------------
 

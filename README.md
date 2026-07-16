@@ -22,7 +22,8 @@ forwarding, no router setup, no accounts**.
   them by the ⠿ grip. Each category has a **lock**: guests can watch, but
   the server rejects their writes to locked controls.
 - **Control types** — toggle (Bool), hold button (Bool), slider (Float),
-  stepper (Int), with min/max clamping.
+  stepper (Int), with min/max clamping. Bool controls can be **inverted**
+  (⇄) when the parameter's logic is backwards — ON then sends OFF.
 - **One-click sharing** — starts a Cloudflare quick tunnel pointing at the
   built-in guest web page (`cloudflared` downloads itself on first use).
   Guests see only the controls you added — never the full parameter list —

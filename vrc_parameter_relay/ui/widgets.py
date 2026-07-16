@@ -91,6 +91,7 @@ class ControlCard(QFrame):
         self.setObjectName("Card")
         self.setFixedWidth(210)
         self._updating = False
+        self._invert = bool(control.get("invert"))
         self._press_pos: QPoint | None = None
 
         root = QVBoxLayout(self)
@@ -107,6 +108,10 @@ class ControlCard(QFrame):
         self.label.setObjectName("CardLabel")
         self.label.setToolTip(f'{control["param"]}  ({control["ptype"]})')
         top.addWidget(self.label, 1)
+        if self._invert:
+            inv_mark = QLabel("⇄", objectName="CardInv")
+            inv_mark.setToolTip("Inverted — ON sends the parameter OFF")
+            top.addWidget(inv_mark)
         menu_btn = QToolButton()
         menu_btn.setObjectName("CardMenu")
         menu_btn.setText("⋯")
@@ -211,7 +216,7 @@ class ControlCard(QFrame):
         try:
             kind = self.control["kind"]
             if kind == "toggle":
-                self.switch.setChecked(bool(value))
+                self.switch.setChecked(bool(value) != self._invert)  # shown = value XOR invert
             elif kind == "slider":
                 if not self.slider.isSliderDown():
                     span = (self.vmax - self.vmin) or 1
