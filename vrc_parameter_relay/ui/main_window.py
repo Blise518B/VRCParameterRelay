@@ -1,0 +1,435 @@
+"""Main window: control board, live parameter dock, share dialog."""
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from PySide6.QtCore import QObject, QSize, Qt, Signal
+from PySide6.QtWidgets import (
+    QDialog, QDockWidget, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QMainWindow, QMessageBox, QPushButton, QScrollArea, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget,
+)
+
+from .. import APP_NAME, AUTHOR, GITHUB_URL
+from .dialogs import ControlDialog, ShareDialog
+from .widgets import CategoryBox, ControlCard
+
+
+class CoreBridge(QObject):
+    """Marshals AppCore events (worker threads) onto the Qt main thread."""
+    event = Signal(object)
+
+
+HEADER_H = 58          # header and dock title share one height so borders align
+ONE_COLUMN_BELOW = 540  # board viewport width where it collapses to one column
+
+
+DOCK_TITLE_H = 42
+
+
+class _TitleBar(QWidget):
+    """QDockWidget sizes custom title bars by sizeHint, not fixed height."""
+
+    def sizeHint(self) -> QSize:
+        return QSize(200, DOCK_TITLE_H)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(120, DOCK_TITLE_H)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, core, tunnel, web) -> None:
+        super().__init__()
+        self.core = core
+        self.tunnel = tunnel
+        self.web = web
+        self.cards: dict[str, ControlCard] = {}      # control id -> card
+        self.param_items: dict[str, QTreeWidgetItem] = {}
+        self.guest_count = 0
+
+        self.setWindowTitle(APP_NAME)
+        self.resize(1080, 640)
+
+        self.bridge = CoreBridge()
+        self.bridge.event.connect(self._on_event)
+        core.add_listener(self.bridge.event.emit)
+        tunnel.on_change = lambda st: core.emit({"t": "tunnel", **st})
+
+        self._build_header()
+        self._build_board_area()
+        self._build_params_dock()
+        self.share_dialog = ShareDialog(self)
+        self.statusBar().showMessage("Starting…")
+        credit = QLabel(
+            f'{APP_NAME} · made by <a href="{GITHUB_URL}" '
+            f'style="color:#3af08b; text-decoration:none;">{AUTHOR}</a>&nbsp;')
+        credit.setOpenExternalLinks(True)
+        self.statusBar().addPermanentWidget(credit)
+
+        self._rebuild_board()
+        self._refresh_params(core.param_snapshot())
+
+    # -- layout -----------------------------------------------------------------
+
+    def _build_header(self) -> None:
+        header = QWidget(objectName="Header")
+        header.setFixedHeight(HEADER_H)
+        lay = QHBoxLayout(header)
+        lay.setContentsMargins(16, 6, 16, 6)
+
+        left = QVBoxLayout()
+        left.setSpacing(0)
+        self.board_name = QLineEdit(objectName="BoardName")
+        self.board_name.setPlaceholderText("Board name")
+        self.board_name.setMinimumWidth(110)
+        self.board_name.setMaximumWidth(380)
+        self.board_name.editingFinished.connect(
+            lambda: self.core.rename_board(self.board_name.text()))
+        self.avatar_label = QLabel("waiting for VRChat…", objectName="AvatarId")
+        self.avatar_label.setMinimumWidth(60)  # allow clipping instead of forcing width
+        left.addWidget(self.board_name)
+        left.addWidget(self.avatar_label)
+        lay.addLayout(left, 1)
+
+        self.vrc_chip = QLabel("VRChat: searching", objectName="Chip")
+        self.guest_chip = QLabel("guests: 0", objectName="Chip")
+        lay.addWidget(self.vrc_chip)
+        lay.addWidget(self.guest_chip)
+
+        self.yolo_btn = QPushButton("⚡ YOLO", objectName="YoloToggle")
+        self.yolo_btn.setCheckable(True)
+        self.yolo_btn.setChecked(self.core.yolo_enabled)
+        self.yolo_btn.setToolTip(
+            "YOLO mode: guests get the full live parameter list and can set anything,\n"
+            "ignoring category locks. Stays on until you turn it off — even after restarts.")
+        self.yolo_btn.toggled.connect(lambda on: self.request_yolo(on, self.yolo_btn))
+        lay.addWidget(self.yolo_btn)
+
+        sync_btn = QPushButton("", objectName="SyncBtn")  # Segoe MDL2 refresh glyph
+        sync_btn.setToolTip("Re-sync avatar && parameters from VRChat now")
+        sync_btn.setFixedWidth(36)
+        sync_btn.clicked.connect(lambda: self.core.link.refetch())
+        lay.addWidget(sync_btn)
+
+        cat_btn = QPushButton("＋ Category")
+        cat_btn.setToolTip("Add another category box to the board")
+        cat_btn.clicked.connect(lambda: self.core.add_category())
+        share_btn = QPushButton("Share", objectName="Primary")
+        share_btn.clicked.connect(self._open_share)
+        lay.addWidget(cat_btn)
+        lay.addWidget(share_btn)
+
+        # chips are QLabels that would otherwise stretch to the header's height
+        for widget in (self.vrc_chip, self.guest_chip, self.yolo_btn, sync_btn,
+                       cat_btn, share_btn):
+            widget.setFixedHeight(34)
+
+        # full-window header (above the dock too) so its width requirement
+        # doesn't stack on top of the parameter panel's
+        self.setMenuWidget(header)
+
+        wrapper = QWidget()
+        wl = QVBoxLayout(wrapper)
+        wl.setContentsMargins(0, 0, 0, 0)
+        wl.setSpacing(0)
+
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+
+        left = QVBoxLayout()
+        left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(0)
+        self.board_scroll = QScrollArea(widgetResizable=True)
+        self.board_container = QWidget(objectName="BoardArea")
+        self.board_cols_layout = QHBoxLayout(self.board_container)
+        self.board_cols_layout.setContentsMargins(14, 14, 14, 14)
+        self.board_cols_layout.setSpacing(12)
+        self.col_layouts: list[QVBoxLayout] = [QVBoxLayout(), QVBoxLayout()]
+        for col in self.col_layouts:
+            col.setSpacing(12)
+            col.setAlignment(Qt.AlignTop)
+            self.board_cols_layout.addLayout(col, 1)
+        self.board_scroll.setWidget(self.board_container)
+        left.addWidget(self.board_scroll, 1)
+
+        self.empty_label = QLabel(
+            "Waiting for VRChat…\n\nStart VRChat with OSC enabled and load into an avatar.",
+            alignment=Qt.AlignCenter)
+        self.empty_label.setStyleSheet("color:#6d6d82; font-size:14px;")
+        left.addWidget(self.empty_label, 2)
+        body.addLayout(left, 1)
+
+        # pull-tab: < opens the parameter panel, > tucks it away; the dock
+        # separator right of it is the full-height resize line
+        self.dock_toggle = QPushButton(">", objectName="DockToggle")
+        self.dock_toggle.setFixedSize(26, 84)
+        self.dock_toggle.setCursor(Qt.PointingHandCursor)
+        self.dock_toggle.setToolTip("Show/hide the avatar parameters panel\n"
+                                    "(double-click a parameter there to add it)")
+        self.dock_toggle.clicked.connect(
+            lambda: self.params_dock.setVisible(not self.params_dock.isVisible()))
+        tab_wrap = QVBoxLayout()
+        tab_wrap.setContentsMargins(0, 0, 0, 0)
+        tab_wrap.addStretch(1)
+        tab_wrap.addWidget(self.dock_toggle)
+        tab_wrap.addStretch(1)
+        body.addLayout(tab_wrap)
+
+        wl.addLayout(body, 1)
+        self.setCentralWidget(wrapper)
+
+    def _build_board_area(self) -> None:
+        pass  # built inside _build_header's wrapper
+
+    def _build_params_dock(self) -> None:
+        self.params_dock = QDockWidget("Avatar parameters", self)
+        self.params_dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
+
+        # custom title bar matching the header so the top border runs
+        # continuously across the whole window
+        title_bar = _TitleBar(objectName="DockTitle")
+        tl = QHBoxLayout(title_bar)
+        tl.setContentsMargins(14, 0, 14, 0)
+        tl.addWidget(QLabel("Avatar parameters", objectName="DockTitleText"))
+        tl.addStretch(1)
+        tl.addWidget(QLabel("double-click to add", objectName="DockTitleHint"))
+        self.params_dock.setTitleBarWidget(title_bar)
+
+        inner = QWidget()
+        lay = QVBoxLayout(inner)
+        lay.setContentsMargins(12, 10, 12, 10)
+
+        self.search = QLineEdit(placeholderText="Filter parameters…")
+        self.search.textChanged.connect(self._apply_filter)
+        lay.addWidget(self.search)
+
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Parameter", "Type", "Value"])
+        self.tree.setRootIsDecorated(False)
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setTextElideMode(Qt.ElideRight)
+        header = self.tree.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.Stretch)  # name column absorbs resizes
+        header.setSectionResizeMode(1, QHeaderView.Fixed)
+        header.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.tree.setColumnWidth(1, 52)
+        self.tree.setColumnWidth(2, 76)
+        self.tree.itemDoubleClicked.connect(self._add_from_item)
+        lay.addWidget(self.tree)
+
+        hint = QLabel("Values update live from VRChat.")
+        hint.setStyleSheet("color:#6d6d82; font-size:11px;")
+        lay.addWidget(hint)
+
+        self.params_dock.setWidget(inner)
+        self.params_dock.setMinimumWidth(300)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.params_dock)
+        self.params_dock.visibilityChanged.connect(
+            lambda visible: self.dock_toggle.setText(">" if visible else "<"))
+
+    # -- responsive board columns -------------------------------------------------
+
+    _board_cols = 2
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        target = 1 if self.board_scroll.viewport().width() < ONE_COLUMN_BELOW else 2
+        if target != self._board_cols:
+            self._board_cols = target
+            self._rebuild_board()
+
+    # -- core events --------------------------------------------------------------
+
+    def _on_event(self, event: dict) -> None:
+        t = event.get("t")
+        if t == "param":
+            self._update_param_row(event["name"], event["ptype"], event["value"])
+            for card in self.cards.values():
+                if card.control["param"] == event["name"]:
+                    card.update_value(event["value"])
+        elif t == "params_reset":
+            self._refresh_params(event["params"])
+        elif t in ("avatar", "board"):
+            self._rebuild_board()
+        elif t == "vrc_status":
+            self._update_vrc_chip(event)
+        elif t == "tunnel":
+            self.share_dialog.update_tunnel(event)
+        elif t == "guests":
+            self.guest_count = event["count"]
+            self.guest_chip.setText(f"guests: {self.guest_count}")
+            self.share_dialog.update_guests(self.guest_count)
+        elif t == "token":
+            self.share_dialog.refresh_state()
+        elif t == "sharing":
+            self.share_dialog.refresh_state()
+        elif t == "yolo":
+            self.yolo_btn.blockSignals(True)
+            self.yolo_btn.setChecked(event["enabled"])
+            self.yolo_btn.blockSignals(False)
+            self.share_dialog.refresh_state()
+
+    def _update_vrc_chip(self, st: dict) -> None:
+        if st.get("vrchat_found") or st.get("receiving"):
+            self.vrc_chip.setText("VRChat: connected")
+            self.vrc_chip.setProperty("state", "ok")
+        elif st.get("advertised"):
+            self.vrc_chip.setText("VRChat: searching")
+            self.vrc_chip.setProperty("state", "")
+        else:
+            self.vrc_chip.setText("VRChat: mDNS error")
+            self.vrc_chip.setProperty("state", "bad")
+        self.vrc_chip.style().unpolish(self.vrc_chip)
+        self.vrc_chip.style().polish(self.vrc_chip)
+        self.statusBar().showMessage(
+            f"OSC in: 127.0.0.1:{st.get('osc_port', '?')} (via OSCQuery)   |   "
+            f"OSC out: {st.get('send_target', '?')}   |   "
+            f"advertised: {'yes' if st.get('advertised') else 'no'}   |   "
+            f"web: 127.0.0.1:{self.web.port or '…'}")
+
+    # -- board ---------------------------------------------------------------------
+
+    def _rebuild_board(self) -> None:
+        board = self.core.board
+        self.board_name.setText(board.get("name") or "")
+        self.avatar_label.setText(board.get("avatar_id") or "waiting for VRChat…")
+
+        for col in self.col_layouts:
+            while col.count():
+                item = col.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+        self.cards.clear()
+
+        has_avatar = board.get("avatar_id") is not None
+        self.empty_label.setVisible(not has_avatar)
+        self.board_scroll.setVisible(has_avatar)
+        if not has_avatar:
+            return
+
+        values = self.core.board_values()
+        for i, category in enumerate(board["categories"]):
+            box = CategoryBox(category)
+            box.renamed.connect(self.core.rename_category)
+            box.lock_toggled.connect(self.core.set_category_locked)
+            box.delete_requested.connect(self._delete_category)
+            box.control_dropped.connect(self.core.move_control_to_category)
+            for control in board["controls"]:
+                if control.get("cat") != category["id"]:
+                    continue
+                card = ControlCard(control, values.get(control["param"]))
+                card.set_value.connect(self.core.set_control_value)
+                card.remove_requested.connect(self.core.remove_control)
+                card.edit_requested.connect(self._edit_control)
+                box.add_card(card)
+                self.cards[control["id"]] = card
+            box.finalize()
+            self.col_layouts[i % self._board_cols].addWidget(box)
+
+        # in single-column mode the empty second column must not eat width
+        self.board_cols_layout.setStretch(0, 1)
+        self.board_cols_layout.setStretch(1, 1 if self._board_cols == 2 else 0)
+
+    def _delete_category(self, cat_id: str) -> None:
+        board = self.core.board
+        has_controls = any(c.get("cat") == cat_id for c in board["controls"])
+        if has_controls:
+            answer = QMessageBox.question(
+                self, "Delete category",
+                "This category still has controls — they'll move to the first "
+                "category. Delete it?")
+            if answer != QMessageBox.Yes:
+                return
+        if not self.core.remove_category(cat_id):
+            QMessageBox.information(self, "Can't delete",
+                                    "The board needs at least one category.")
+
+    def _edit_control(self, control_id: str) -> None:
+        control = next((c for c in self.core.board["controls"] if c["id"] == control_id), None)
+        if not control:
+            return
+        dlg = ControlDialog(self, control["param"], control["ptype"], existing=control)
+        if dlg.exec() == QDialog.Accepted:
+            self.core.update_control(control_id, **dlg.result_dict())
+
+    # -- parameter dock ---------------------------------------------------------------
+
+    def _refresh_params(self, params: dict[str, dict]) -> None:
+        self.tree.clear()
+        self.param_items.clear()
+        for name in sorted(params):
+            self._update_param_row(name, params[name]["ptype"], params[name]["value"])
+        self._apply_filter()
+
+    def _update_param_row(self, name: str, ptype: str, value: Any) -> None:
+        item = self.param_items.get(name)
+        if item is None:
+            item = QTreeWidgetItem([name, ptype, _fmt(value)])
+            item.setToolTip(0, name)  # long names elide in the stretch column
+            item.setData(0, Qt.UserRole, name)
+            item.setData(1, Qt.UserRole, ptype)
+            self.tree.addTopLevelItem(item)
+            self.param_items[name] = item
+            self._apply_filter_item(item)
+        else:
+            item.setText(1, ptype)
+            item.setText(2, _fmt(value))
+            item.setData(1, Qt.UserRole, ptype)
+
+    def _apply_filter(self) -> None:
+        for item in self.param_items.values():
+            self._apply_filter_item(item)
+
+    def _apply_filter_item(self, item: QTreeWidgetItem) -> None:
+        needle = self.search.text().lower().strip()
+        item.setHidden(bool(needle) and needle not in item.text(0).lower())
+
+    def _add_from_item(self, item: QTreeWidgetItem) -> None:
+        name = item.data(0, Qt.UserRole)
+        ptype = item.data(1, Qt.UserRole) or "Float"
+        if not self.core.avatar_id:
+            QMessageBox.information(
+                self, "No avatar", "Waiting for VRChat — load into an avatar first.")
+            return
+        dlg = ControlDialog(self, name, ptype, categories=self.core.board["categories"])
+        if dlg.exec() == QDialog.Accepted:
+            spec = dlg.result_dict()
+            self.core.add_control(name, spec.pop("kind"), spec.get("label"),
+                                  spec.get("min"), spec.get("max"),
+                                  category=spec.get("category"))
+
+    # -- sharing ------------------------------------------------------------------------
+
+    def _open_share(self) -> None:
+        self.share_dialog.show()
+        self.share_dialog.raise_()
+        self.share_dialog.activateWindow()
+
+    def request_yolo(self, on: bool, widget) -> None:
+        """Shared confirm flow for the header toggle and the Share dialog checkbox."""
+        if on and not self.core.yolo_enabled:
+            answer = QMessageBox.warning(
+                self, "Enable YOLO mode?",
+                "Everyone with the link will be able to see and change EVERY avatar "
+                "parameter — not just your board, and category locks won't apply.\n\n"
+                "It stays on until you turn it off, even after restarting the app. "
+                "Enable?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                widget.blockSignals(True)
+                widget.setChecked(False)
+                widget.blockSignals(False)
+                return
+        self.core.set_yolo(on)
+
+
+def _fmt(value: Any) -> str:
+    if value is None:
+        return "–"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
