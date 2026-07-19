@@ -1,5 +1,5 @@
 # .github/workflows/build.yml
-name: Build CX_Freeze Binaries
+name: Build Pyinstaller Binaries
 
 on:
   release:
@@ -58,7 +58,6 @@ jobs:
 
       - name: Build with pyinstaller (Linux)
         if: runner.os == 'Linux'
-        shell: cmd
         run: |
           pyinstaller --noconfirm VRCParameterRelay.spec
 
