@@ -45,7 +45,10 @@ jobs:
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
+          sudo apt-get update -y
+          sudo apt-get zsync wget -y
+          wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
           pip install -r requirements.txt
           pip install pyinstaller
 
@@ -59,7 +62,13 @@ jobs:
       - name: Build with pyinstaller (Linux)
         if: runner.os == 'Linux'
         run: |
+          RELEASEVERSION="${GITHUB_REF#refs/tags/}"
+          APPNAME=${GITHUB_REPOSITORY#*\/}
           pyinstaller --noconfirm VRCParameterRelay.spec
+          cp vrc_parameter_relay/appimage/AppRun dist/
+          cp vrc_parameter_relay/assets/icon.png dist/VRCParameterRelay.png
+          cat vrc_parameter_relay/appimage/AppImage-template.desktop | sed "s/APPIMAGENAME/$APPNAME/" | sed "s/APPIMAGENAME/$APPNAME/" > dist/$APPNAME.desktop
+          ./appimagetool-x86_64.AppImage appimagetool-x86_64.AppImage dist/ VRCParameterRelay.AppImage
 
       # --- Upload ---
       - name: Upload binary
