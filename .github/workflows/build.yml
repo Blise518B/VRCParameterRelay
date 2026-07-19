@@ -18,7 +18,7 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact-name: VRCParameterRelay
-            output-ext: ""
+            output-ext: "AppImage"
           - os: windows-latest
             artifact-name: VRCParameterRelay
             output-ext: "exe"
@@ -64,18 +64,23 @@ jobs:
         run: |
           RELEASEVERSION="${GITHUB_REF#refs/tags/}"
           APPNAME=${GITHUB_REPOSITORY#*\/}
+          ARCH=$(uname -m)
+          UPDATEURL="gh-releases-zsync|${GITHUB_REPOSITORY////|}|latest|$APPNAME-*$ARCH.AppImage.zsync"
           pyinstaller --noconfirm VRCParameterRelay.spec
           cp vrc_parameter_relay/appimage/AppRun dist/
           cp vrc_parameter_relay/assets/icon.png dist/VRCParameterRelay.png
-          cat vrc_parameter_relay/appimage/AppImage-template.desktop | sed "s/APPIMAGENAME/$APPNAME/" | sed "s/APPIMAGENAME/$APPNAME/" > dist/$APPNAME.desktop
-          ./appimagetool-x86_64.AppImage appimagetool-x86_64.AppImage dist/ VRCParameterRelay.AppImage
+          cat vrc_parameter_relay/appimage/AppImage-template.desktop | sed "s/APPIMAGENAME/$APPNAME/" | sed "s/APPIMAGEVERSION/$RELEASEVERSION/" | sed "s/APPIMAGEARCH/$ARCH/" > dist/$APPNAME.desktop
+          ./appimagetool-x86_64.AppImage -u $UPDATEURL dist/ dist/$APPNAME-$RELEASEVERSION-$ARCH.AppImage
+          cp $APPNAME-$RELEASEVERSION-$ARCH.Appimage.zsync dist/
 
       # --- Upload ---
       - name: Upload binary
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact-name }}
-          path: dist/${{ matrix.artifact-name }}*${{ matrix.output-ext }}
+          path: |
+                dist/${{ matrix.artifact-name }}*${{ matrix.output-ext }}
+                dist/${{ matrix.artifact-name }}
           retention-days: 30
 
       - name: Upload to Release
@@ -83,4 +88,6 @@ jobs:
         with:
           working_directory: dist
           files: |
+            ${{ matrix.artifact-name }}
             ${{ matrix.artifact-name }}*${{ matrix.output-ext }}
+            ${{ matrix.artifact-name }}*${{ matrix.output-ext }}.zsync
