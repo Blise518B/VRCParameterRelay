@@ -71,7 +71,7 @@ jobs:
           cp vrc_parameter_relay/assets/icon.png dist/VRCParameterRelay.png
           cat vrc_parameter_relay/appimage/AppImage-template.desktop | sed "s/APPIMAGENAME/$APPNAME/" | sed "s/APPIMAGEVERSION/$RELEASEVERSION/" | sed "s/APPIMAGEARCH/$ARCH/" > dist/$APPNAME.desktop
           ./appimagetool-x86_64.AppImage -u $UPDATEURL dist/ dist/$APPNAME-$RELEASEVERSION-$ARCH.AppImage
-          cp $APPNAME-$RELEASEVERSION-$ARCH.Appimage.zsync dist/
+          cp $APPNAME-$RELEASEVERSION-$ARCH.AppImage.zsync dist/
 
       # --- Upload ---
       - name: Upload binary
