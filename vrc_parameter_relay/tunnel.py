@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import stat
 import subprocess
 import sys
 import threading
@@ -27,10 +28,23 @@ from typing import Callable, Optional
 
 log = logging.getLogger(__name__)
 
-CLOUDFLARED_URL = (
-    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
-)
-NGROK_ZIP_URL = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
+if sys.platform == "win32":
+    CLOUDFLARED_URL = (
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+    )
+    CLOUDFLARED_BINARY="cloudflared.exe"
+    NGROK_ZIP_URL = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
+    NGROK_BINARY="ngrok.exe"
+
+
+if sys.platform == "linux":
+    CLOUDFLARED_URL = (
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+    )
+    CLOUDFLARED_BINARY="cloudflared"
+    NGROK_ZIP_URL = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.zip"
+    NGROK_BINARY="ngrok"
+
 TRYCLOUDFLARE_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
 
