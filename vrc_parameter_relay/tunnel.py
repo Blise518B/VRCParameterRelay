@@ -107,7 +107,7 @@ class Tunnel:
         self.on_change(self.status())
 
     def _exe_path(self, provider: str) -> Path:
-        return self.bin_dir / ("ngrok.exe" if provider == "ngrok" else "cloudflared.exe")
+        return self.bin_dir / (NGROK_BINARY if provider == "ngrok" else CLOUDFLARED_BINARY)
 
     def _start_impl(self, local_port: int) -> None:
         provider = self.provider()
@@ -140,7 +140,7 @@ class Tunnel:
             tmp = exe.with_suffix(".zip")
             self._fetch(NGROK_ZIP_URL, tmp)
             with zipfile.ZipFile(tmp) as zf:
-                with zf.open("ngrok.exe") as src, open(exe, "wb") as dst:
+                with zf.open(NGROK_BINARY) as src, open(exe, "wb") as dst:
                     dst.write(src.read())
             tmp.unlink(missing_ok=True)
         else:
