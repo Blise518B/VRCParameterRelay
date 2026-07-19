@@ -123,6 +123,9 @@ class Tunnel:
                 self._download(provider, exe)
             self._set("starting")
             self._err_hint = None
+            if sys.platform == "linux":
+                getfileperms = os.stat(exe)
+                os.chmod(exe, getfileperms.st_mode | stat.S_IEXEC)
             if provider == "ngrok":
                 self._spawn_ngrok(exe, local_port, token, domain)
             else:
