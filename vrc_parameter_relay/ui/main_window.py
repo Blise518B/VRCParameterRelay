@@ -1,6 +1,10 @@
 """Main window: control board, live parameter dock, share dialog."""
 from __future__ import annotations
 
+import json
+import re
+import threading
+import urllib.request
 from typing import Any, Optional
 
 from PySide6.QtCore import QObject, QSize, Qt, Signal
@@ -10,9 +14,12 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .. import APP_NAME, AUTHOR, GITHUB_URL
+from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__
 from .dialogs import ControlDialog, ShareDialog
-from .widgets import CategoryBox, ControlCard
+from .widgets import CategoryBox, ControlCard, ParamTree
+
+RELEASES_URL = f"{GITHUB_URL}/VRCParameterRelay/releases"
+LATEST_API = "https://api.github.com/repos/Blise518B/VRCParameterRelay/releases/latest"
 
 
 class CoreBridge(QObject):
@@ -38,6 +45,8 @@ class _TitleBar(QWidget):
 
 
 class MainWindow(QMainWindow):
+    update_found = Signal(str)  # newer version tag available on GitHub
+
     def __init__(self, core, tunnel, web) -> None:
         super().__init__()
         self.core = core
@@ -60,14 +69,22 @@ class MainWindow(QMainWindow):
         self._build_params_dock()
         self.share_dialog = ShareDialog(self)
         self.statusBar().showMessage("Starting…")
+        self.update_label = QLabel()
+        self.update_label.setOpenExternalLinks(True)
+        self.update_label.setVisible(False)
+        self.statusBar().addWidget(self.update_label)
+
         credit = QLabel(
-            f'{APP_NAME} · made by <a href="{GITHUB_URL}" '
+            f'{APP_NAME} v{__version__} · made by <a href="{GITHUB_URL}" '
             f'style="color:#3af08b; text-decoration:none;">{AUTHOR}</a>&nbsp;')
         credit.setOpenExternalLinks(True)
         self.statusBar().addPermanentWidget(credit)
 
+        self.update_found.connect(self._show_update)
+
         self._rebuild_board()
         self._refresh_params(core.param_snapshot())
+        self._start_update_check()
 
     # -- layout -----------------------------------------------------------------
 
@@ -193,7 +210,7 @@ class MainWindow(QMainWindow):
         tl.setContentsMargins(14, 0, 14, 0)
         tl.addWidget(QLabel("Avatar parameters", objectName="DockTitleText"))
         tl.addStretch(1)
-        tl.addWidget(QLabel("double-click to add", objectName="DockTitleHint"))
+        tl.addWidget(QLabel("double-click or drag to add", objectName="DockTitleHint"))
         self.params_dock.setTitleBarWidget(title_bar)
 
         inner = QWidget()
@@ -204,11 +221,13 @@ class MainWindow(QMainWindow):
         self.search.textChanged.connect(self._apply_filter)
         lay.addWidget(self.search)
 
-        self.tree = QTreeWidget()
+        self.tree = ParamTree()
         self.tree.setHeaderLabels(["Parameter", "Type", "Value"])
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(True)
         self.tree.setTextElideMode(Qt.ElideRight)
+        self.tree.setDragEnabled(True)
+        self.tree.setDragDropMode(QTreeWidget.DragOnly)
         header = self.tree.header()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.Stretch)  # name column absorbs resizes
@@ -316,6 +335,8 @@ class MainWindow(QMainWindow):
             box.lock_toggled.connect(self.core.set_category_locked)
             box.delete_requested.connect(self._delete_category)
             box.control_dropped.connect(self.core.move_control_to_category)
+            box.param_dropped.connect(self._param_dropped)
+            box.category_dropped.connect(self.core.move_category)
             for control in board["controls"]:
                 if control.get("cat") != category["id"]:
                     continue
@@ -387,19 +408,54 @@ class MainWindow(QMainWindow):
         item.setHidden(bool(needle) and needle not in item.text(0).lower())
 
     def _add_from_item(self, item: QTreeWidgetItem) -> None:
+        """Double-click: add instantly with defaults to the last-used category.
+
+        Fine-tuning (control type, range, invert, label) is done afterwards
+        via the card's ⋯ → Edit — the defaults are right almost every time.
+        """
         name = item.data(0, Qt.UserRole)
         ptype = item.data(1, Qt.UserRole) or "Float"
         if not self.core.avatar_id:
             QMessageBox.information(
                 self, "No avatar", "Waiting for VRChat — load into an avatar first.")
             return
-        dlg = ControlDialog(self, name, ptype, categories=self.core.board["categories"])
-        if dlg.exec() == QDialog.Accepted:
-            spec = dlg.result_dict()
-            self.core.add_control(name, spec.pop("kind"), spec.get("label"),
-                                  spec.get("min"), spec.get("max"),
-                                  category=spec.get("category"),
-                                  invert=spec.get("invert", False))
+        self.core.add_control(name, self.core.default_kind(ptype),
+                              category=self._last_category())
+
+    def _param_dropped(self, param: str, ptype: str, cat_id: str, index: int) -> None:
+        self._last_cat = cat_id
+        self.core.add_control(param, self.core.default_kind(ptype),
+                              category=cat_id, index=index)
+
+    def _last_category(self) -> str:
+        cats = self.core.board["categories"]
+        ids = {c["id"] for c in cats}
+        if getattr(self, "_last_cat", None) in ids:
+            return self._last_cat
+        return cats[0]["id"]
+
+    # -- update check ---------------------------------------------------------------
+
+    def _start_update_check(self) -> None:
+        threading.Thread(target=self._check_update, name="update-check", daemon=True).start()
+
+    def _check_update(self) -> None:
+        try:
+            req = urllib.request.Request(
+                LATEST_API, headers={"Accept": "application/vnd.github+json",
+                                     "User-Agent": "VRCParameterRelay"})
+            with urllib.request.urlopen(req, timeout=6) as res:
+                tag = json.loads(res.read().decode("utf-8")).get("tag_name", "")
+        except Exception:
+            return  # offline / rate-limited / API down — silently skip
+        if tag and _is_newer(tag, __version__):
+            self.update_found.emit(tag)
+
+    def _show_update(self, tag: str) -> None:
+        self.update_label.setText(
+            f'<a href="{RELEASES_URL}" style="color:#facc15; text-decoration:none;">'
+            f'⬆ Update available: {tag} — get it here</a>')
+        self.update_label.setVisible(True)
 
     # -- sharing ------------------------------------------------------------------------
 
@@ -434,3 +490,12 @@ def _fmt(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.3f}"
     return str(value)
+
+
+def _version_tuple(v: str) -> tuple:
+    nums = re.findall(r"\d+", v or "")
+    return tuple(int(n) for n in nums) if nums else (0,)
+
+
+def _is_newer(remote: str, local: str) -> bool:
+    return _version_tuple(remote) > _version_tuple(local)

@@ -73,6 +73,19 @@ class GuestServer:
     async def _index(self, request: web.Request) -> web.Response:
         return web.FileResponse(web_root() / "index.html")
 
+    def _hello_payload(self) -> dict:
+        payload = {
+            "t": "hello",
+            "board": _public_board(self.core.board),
+            "avatar": self.core.avatar_id,
+            "values": self.core.board_values(),
+            "yolo": self.core.yolo_enabled,
+            "paused": not self.core.sharing_enabled,
+        }
+        if self.core.yolo_enabled:
+            payload["params"] = self.core.param_snapshot()
+        return payload
+
     # -- websocket ----------------------------------------------------------
 
     async def _ws(self, request: web.Request) -> web.WebSocketResponse:
@@ -84,23 +97,12 @@ class GuestServer:
             await ws.send_json({"t": "denied"})
             await ws.close()
             return ws
-        if not self.core.sharing_enabled:
-            await ws.send_json({"t": "paused"})  # valid link, host paused — retry later
-            await ws.close()
-            return ws
 
+        # Guests stay connected even while paused — they just see a "paused"
+        # overlay and their inputs are ignored server-side until resume.
         self._sockets.add(ws)
         self._notify_guests()
-        hello = {
-            "t": "hello",
-            "board": _public_board(self.core.board),
-            "avatar": self.core.avatar_id,
-            "values": self.core.board_values(),
-            "yolo": self.core.yolo_enabled,
-        }
-        if self.core.yolo_enabled:
-            hello["params"] = self.core.param_snapshot()
-        await ws.send_json(hello)
+        await ws.send_json(self._hello_payload())
 
         allowance, last = GUEST_MSGS_PER_SEC, time.monotonic()
         try:
@@ -117,6 +119,8 @@ class GuestServer:
                     data = json.loads(msg.data)
                 except ValueError:
                     continue
+                if not self.core.sharing_enabled:
+                    continue  # paused — ignore guest input, keep the socket open
                 if data.get("t") == "set":
                     self.core.set_control_value(str(data.get("id")), data.get("value"), source="guest")
                 elif data.get("t") == "setp":  # YOLO mode: arbitrary parameter
@@ -140,8 +144,10 @@ class GuestServer:
             self.loop.call_soon_threadsafe(self._schedule, {"t": "denied"}, True)
             return
         if event["t"] == "sharing":
-            if not event["enabled"]:  # paused -> kick guests, they auto-retry
-                self.loop.call_soon_threadsafe(self._schedule, {"t": "paused"}, True)
+            # pause = overlay + input block (socket stays open); resume = clear it
+            payload = {**self._hello_payload(), "t": "resumed"} if event["enabled"] \
+                else {"t": "paused"}
+            self.loop.call_soon_threadsafe(self._schedule, payload, False)
             return
         out = None
         if event["t"] == "param":

@@ -19,6 +19,15 @@ html, body {
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
+/* host paused: dim + disable the board, keep the connection alive */
+body.paused .board { opacity: 0.45; pointer-events: none; filter: grayscale(0.35); }
+body.paused::before {
+  content: "⏸  Paused by the host — controls are disabled";
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  background: #7a4410; color: #ffd9a8;
+  text-align: center; padding: 11px 12px; font-weight: 600; font-size: 14px;
+}
+
 header {
   padding: 18px 20px 6px;
   position: sticky;

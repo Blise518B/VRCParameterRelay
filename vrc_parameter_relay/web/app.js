@@ -12,6 +12,7 @@ let ws = null;
 let board = { name: "", controls: [] };
 let values = {};
 let retryMs = 1000;
+let paused = false;
 let yoloOn = false;
 let allParams = {};       // name -> {ptype, value}   (YOLO mode only)
 let yoloFilter = "";
@@ -28,12 +29,16 @@ function connect() {
     const msg = JSON.parse(ev.data);
     switch (msg.t) {
       case "hello":
+      case "resumed":
       case "avatar":
       case "board":
-        hideOverlay();
         board = msg.board;
         values = msg.values || {};
-        if (msg.t === "hello") yoloOn = !!msg.yolo;
+        if (msg.t === "hello" || msg.t === "resumed") {
+          yoloOn = !!msg.yolo;
+          setPaused(!!msg.paused);
+        }
+        if (msg.t === "resumed") setPaused(false);
         if (msg.params) allParams = msg.params;
         render();
         break;
@@ -59,11 +64,8 @@ function connect() {
         if (paramRows.has(msg.name)) paramRows.get(msg.name)(msg.value);
         break;
       case "paused":
-        showOverlay("The host has paused sharing. This page reconnects automatically "
-          + "as soon as they resume — keep it open.");
-        setStatus(false, "paused by host");
-        retryMs = 5000; // steady retry while paused
-        return;
+        setPaused(true);
+        break;
       case "denied":
         showOverlay("This remote link is invalid or has been revoked by the host.");
         ws.onclose = null;
@@ -73,15 +75,16 @@ function connect() {
   };
 
   ws.onclose = () => {
-    if (!overlayEl.classList.contains("hidden") &&
-        overlayText.textContent.startsWith("The host has paused")) {
-      setTimeout(connect, 5000);
-      return;
-    }
     setStatus(false, "reconnecting…");
     setTimeout(connect, retryMs);
     retryMs = Math.min(retryMs * 1.6, 15000);
   };
+}
+
+function setPaused(on) {
+  paused = on;
+  document.body.classList.toggle("paused", on);
+  setStatus(!on, on ? "paused by host" : "connected");
 }
 
 function setStatus(ok, text) {
@@ -99,7 +102,7 @@ function hideOverlay() {
 }
 
 function send(id, value) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (!paused && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ t: "set", id, value }));
   }
 }
@@ -185,7 +188,7 @@ window.addEventListener("resize", () => {
 });
 
 function sendP(name, value) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
+  if (!paused && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ t: "setp", name, value }));
   }
 }

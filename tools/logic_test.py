@@ -96,6 +96,26 @@ def main() -> None:
     check("control category persisted",
           next(c for c in reloaded["controls"] if c["id"] == hoodie["id"])["cat"] == nsfw["id"])
 
+    # instant-add default kinds
+    check("default kind Bool->toggle", core.default_kind("Bool") == "toggle")
+    check("default kind Int->int", core.default_kind("Int") == "int")
+    check("default kind Float->slider", core.default_kind("Float") == "slider")
+
+    # add_control with a drop index lands at the right spot in its category
+    catA = core.board["categories"][0]["id"]
+    a1 = core.add_control("Hoodie", "toggle", category=catA)
+    a2 = core.add_control("GlowToggle", "toggle", category=catA, index=0)  # before a1
+    order = [c["id"] for c in core.board["controls"] if c["cat"] == catA]
+    check("dropped control inserts at index", order.index(a2["id"]) < order.index(a1["id"]))
+    core.remove_control(a1["id"]); core.remove_control(a2["id"])
+
+    # move_category reorders
+    cat_ids0 = [c["id"] for c in core.board["categories"]]
+    check("move_category reorders", core.move_category(cat_ids0[-1], cat_ids0[0]))
+    check("category moved to front",
+          core.board["categories"][0]["id"] == cat_ids0[-1])
+    check("move_category no-op on same", core.move_category(cat_ids0[0], cat_ids0[0]) is False)
+
     # robustness: a board file missing categories gets defaults on load
     bare = store._board_path("avtr_bare")
     bare.write_text('{"name": "Old", "controls": [{"id": "x1", "param": "P", '

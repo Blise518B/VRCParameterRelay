@@ -3,17 +3,35 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from PySide6.QtCore import QMimeData, QPoint, QRect, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QMimeData, QPoint, QRect, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QMenu,
-    QPushButton, QSlider, QSpinBox, QToolButton, QVBoxLayout, QWidget,
-    QWidgetItem,
+    QPushButton, QSlider, QSpinBox, QToolButton, QTreeWidget, QVBoxLayout,
+    QWidget, QWidgetItem,
 )
 
 SLIDER_STEPS = 1000
-MIME_CONTROL = "application/x-vrc-parameter-relay-control"
+MIME_CONTROL = "application/x-vrc-parameter-relay-control"      # move existing card
+MIME_PARAM = "application/x-vrc-parameter-relay-param"          # new control from dock
+MIME_CATEGORY = "application/x-vrc-parameter-relay-category"    # reorder category
 CONTROL_H = 34  # uniform height for every control widget on a card
+
+
+class ParamTree(QTreeWidget):
+    """Parameter list whose rows can be dragged into category boxes."""
+
+    def startDrag(self, actions) -> None:  # noqa: N802
+        item = self.currentItem()
+        if item is None:
+            return
+        name = item.data(0, Qt.UserRole)
+        ptype = item.data(1, Qt.UserRole) or "Float"
+        mime = QMimeData()
+        mime.setData(MIME_PARAM, f"{name}\n{ptype}".encode())
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.CopyAction)
 
 
 class FlowLayout(QLayout):
@@ -272,12 +290,15 @@ class CategoryBox(QFrame):
     lock_toggled = Signal(str, bool)         # cat_id, locked
     delete_requested = Signal(str)           # cat_id
     control_dropped = Signal(str, str, int)  # control_id, cat_id, index
+    param_dropped = Signal(str, str, str, int)   # param, ptype, cat_id, index
+    category_dropped = Signal(str, str)      # dragged_cat_id, target_cat_id
 
     def __init__(self, category: dict[str, Any]) -> None:
         super().__init__()
         self.category = category
         self.setObjectName("Category")
         self.setAcceptDrops(True)
+        self._cat_press: QPoint | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 10)
@@ -285,7 +306,12 @@ class CategoryBox(QFrame):
 
         header = QWidget(objectName="CatHeader")
         hl = QHBoxLayout(header)
-        hl.setContentsMargins(12, 5, 6, 5)
+        hl.setContentsMargins(8, 5, 6, 5)
+        self.grip = QLabel("⠿", objectName="CatGrip")
+        self.grip.setToolTip("Drag to reorder this category")
+        self.grip.setCursor(Qt.OpenHandCursor)
+        self.grip.installEventFilter(self)
+        hl.addWidget(self.grip)
         self.name_edit = QLineEdit(category.get("name") or "")
         self.name_edit.setObjectName("CatName")
         self.name_edit.setPlaceholderText("Category name")
@@ -337,23 +363,59 @@ class CategoryBox(QFrame):
                        lambda: self.delete_requested.emit(self.category["id"]))
         menu.exec(self.mapToGlobal(QPoint(self.width() - 10, 34)))
 
+    # -- category drag source (via the grip) -------------------------------------
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if obj is self.grip:
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._cat_press = event.position().toPoint()
+            elif event.type() == QEvent.MouseMove and self._cat_press is not None:
+                if ((event.position().toPoint() - self._cat_press).manhattanLength()
+                        >= QApplication.startDragDistance()):
+                    self._cat_press = None
+                    mime = QMimeData()
+                    mime.setData(MIME_CATEGORY, self.category["id"].encode())
+                    drag = QDrag(self)
+                    drag.setMimeData(mime)
+                    drag.setPixmap(self.grab())
+                    drag.exec(Qt.MoveAction)
+            elif event.type() == QEvent.MouseButtonRelease:
+                self._cat_press = None
+        return super().eventFilter(obj, event)
+
     # -- drop target -------------------------------------------------------------
 
+    def _accepts(self, event) -> bool:
+        md = event.mimeData()
+        return (md.hasFormat(MIME_CONTROL) or md.hasFormat(MIME_PARAM)
+                or md.hasFormat(MIME_CATEGORY))
+
     def dragEnterEvent(self, event) -> None:
-        if event.mimeData().hasFormat(MIME_CONTROL):
+        if self._accepts(event):
             event.acceptProposedAction()
 
     def dragMoveEvent(self, event) -> None:
-        if event.mimeData().hasFormat(MIME_CONTROL):
+        if self._accepts(event):
             event.acceptProposedAction()
 
     def dropEvent(self, event) -> None:
-        if not event.mimeData().hasFormat(MIME_CONTROL):
+        md = event.mimeData()
+        if md.hasFormat(MIME_CATEGORY):
+            dragged = bytes(md.data(MIME_CATEGORY)).decode()
+            event.acceptProposedAction()
+            if dragged != self.category["id"]:
+                self.category_dropped.emit(dragged, self.category["id"])
             return
-        control_id = bytes(event.mimeData().data(MIME_CONTROL)).decode()
         pos = self.cards_host.mapFrom(self, event.position().toPoint())
-        event.acceptProposedAction()
-        self.control_dropped.emit(control_id, self.category["id"], self._insert_index(pos))
+        index = self._insert_index(pos)
+        if md.hasFormat(MIME_CONTROL):
+            control_id = bytes(md.data(MIME_CONTROL)).decode()
+            event.acceptProposedAction()
+            self.control_dropped.emit(control_id, self.category["id"], index)
+        elif md.hasFormat(MIME_PARAM):
+            param, ptype = bytes(md.data(MIME_PARAM)).decode().split("\n", 1)
+            event.acceptProposedAction()
+            self.param_dropped.emit(param, ptype, self.category["id"], index)
 
     def _insert_index(self, pos: QPoint) -> int:
         """Row-major insertion point among the cards in this box."""

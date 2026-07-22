@@ -89,6 +89,7 @@ QFrame#Category {
     background: #0e120e; border: 1px solid %(edge)s; border-radius: 14px;
 }
 QWidget#CatHeader { background: #1c8a3d; border-radius: 9px; }
+QLabel#CatGrip { color: #eafaee; font-size: 14px; padding: 0 2px; }
 QLineEdit#CatName {
     background: transparent; border: none; font-size: 14px; font-weight: 600;
     padding: 2px 4px; color: #eafaee;

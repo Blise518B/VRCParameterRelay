@@ -21,7 +21,13 @@ from vrc_parameter_relay.webserver import GuestServer
 
 class StubLink:
     on_param = on_avatar = on_full_sync = on_status = None
-    def send_param(self, *a): return True
+
+    def __init__(self) -> None:
+        self.sent: list = []
+
+    def send_param(self, name, ptype, value) -> bool:
+        self.sent.append((name, ptype, value))
+        return True
 
 
 def check(desc: str, cond: bool) -> None:
@@ -38,17 +44,18 @@ async def ws_first_message(url: str) -> dict:
             return json.loads(msg.data)
 
 
-async def ws_hold_until_kicked(url: str, on_open: asyncio.Event) -> list[dict]:
+async def pause_scenario(url: str, core, ready: asyncio.Event) -> list[dict]:
+    """Connect, wait to be paused-then-resumed while holding the socket open."""
     got: list[dict] = []
     async with aiohttp.ClientSession() as session:
         async with session.ws_connect(url) as ws:
-            first = await asyncio.wait_for(ws.receive(), 5)
-            got.append(json.loads(first.data))
-            on_open.set()
-            while True:
+            got.append(json.loads((await asyncio.wait_for(ws.receive(), 5)).data))
+            ready.set()
+            # try to send while paused — must be ignored server-side
+            await ws.send_json({"t": "set", "id": "x", "value": True})
+            for _ in range(2):  # expect: paused, then resumed
                 msg = await asyncio.wait_for(ws.receive(), 10)
-                if msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE,
-                                aiohttp.WSMsgType.CLOSING, aiohttp.WSMsgType.ERROR):
+                if msg.type != aiohttp.WSMsgType.TEXT:
                     break
                 got.append(json.loads(msg.data))
     return got
@@ -56,7 +63,8 @@ async def ws_hold_until_kicked(url: str, on_open: asyncio.Event) -> list[dict]:
 
 def main() -> None:
     store = Store()
-    core = AppCore(store, StubLink())
+    link = StubLink()
+    core = AppCore(store, link)
     web = GuestServer(core, 0)  # random free port
     web.start()
     deadline = time.time() + 10
@@ -66,32 +74,37 @@ def main() -> None:
 
     token = core.guest_token()
     url = f"http://127.0.0.1:{web.port}/ws?k={token}"
-
     loop = asyncio.new_event_loop()
 
-    # sharing disabled (default) -> valid token gets "paused"
+    # sharing off (default): guest still connects, hello says paused=True
     first = loop.run_until_complete(ws_first_message(url))
-    check("guest gets 'paused' while sharing is off", first.get("t") == "paused")
+    check("guest connects while off, hello says paused", first.get("t") == "hello"
+          and first.get("paused") is True)
 
-    # enabled -> hello
+    # enabled -> hello says paused=False
     core.set_sharing(True)
     first = loop.run_until_complete(ws_first_message(url))
-    check("guest gets 'hello' once sharing is on", first.get("t") == "hello")
+    check("hello says not paused once sharing is on", first.get("paused") is False)
 
-    # connected guest gets kicked with 'paused' when host pauses
-    async def kick_scenario() -> list[dict]:
-        opened = asyncio.Event()
-        holder = asyncio.create_task(ws_hold_until_kicked(url, opened))
-        await asyncio.wait_for(opened.wait(), 5)
-        await asyncio.get_event_loop().run_in_executor(None, core.set_sharing, False)
+    # a connected guest stays connected across pause + resume
+    async def run_pause() -> list[dict]:
+        ready = asyncio.Event()
+        holder = asyncio.create_task(pause_scenario(url, core, ready))
+        await asyncio.wait_for(ready.wait(), 5)
+        loop_ = asyncio.get_event_loop()
+        await asyncio.sleep(0.2)
+        link.sent.clear()
+        await loop_.run_in_executor(None, core.set_sharing, False)  # pause
+        await asyncio.sleep(0.3)
+        await loop_.run_in_executor(None, core.set_sharing, True)   # resume
         return await asyncio.wait_for(holder, 10)
 
-    messages = loop.run_until_complete(kick_scenario())
-    check("held guest received 'paused' kick",
-          any(m.get("t") == "paused" for m in messages[1:]))
+    msgs = loop.run_until_complete(run_pause())
+    kinds = [m.get("t") for m in msgs[1:]]
+    check("held guest got 'paused' then 'resumed'", kinds[:2] == ["paused", "resumed"])
+    check("guest input while paused was ignored", link.sent == [])
 
-    # wrong token still 'denied', not 'paused'
-    core.set_sharing(True)
+    # wrong token still 'denied'
     bad = loop.run_until_complete(
         ws_first_message(f"http://127.0.0.1:{web.port}/ws?k=wrong"))
     check("bad token still gets 'denied'", bad.get("t") == "denied")

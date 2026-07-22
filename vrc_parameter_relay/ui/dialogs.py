@@ -100,8 +100,9 @@ class ShareDialog(QDialog):
 
         intro = QLabel(
             "Creates a public link so friends can use your board from anywhere — no "
-            "port forwarding needed. The link keeps working (even across pauses) "
-            "until you hit “Reset link”. Pausing kicks guests but keeps the same link.")
+            "port forwarding needed. Pausing keeps everyone connected but shows them a "
+            "“paused” screen and blocks their inputs; the link keeps working until you "
+            "hit “Reset link”.")
         intro.setWordWrap(True)
         intro.setStyleSheet("color:#94a698;")
         lay.addWidget(intro)

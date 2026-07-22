@@ -165,9 +165,15 @@ class AppCore:
 
     # -- board edits (host only) --------------------------------------------------
 
+    @staticmethod
+    def default_kind(ptype: str) -> str:
+        """The control type used when adding a parameter without asking."""
+        return {"Bool": "toggle", "Int": "int", "Float": "slider"}.get(ptype, "slider")
+
     def add_control(self, param: str, kind: str, label: Optional[str] = None,
                     vmin: Optional[float] = None, vmax: Optional[float] = None,
-                    category: Optional[str] = None, invert: bool = False) -> Optional[dict]:
+                    category: Optional[str] = None, invert: bool = False,
+                    index: Optional[int] = None) -> Optional[dict]:
         if kind not in CONTROL_KINDS:
             return None
         with self._lock:
@@ -178,20 +184,27 @@ class AppCore:
             if info.get("ptype"):
                 ptype = info["ptype"]
             cat_ids = {c["id"] for c in self.board["categories"]}
+            cat = category if category in cat_ids else self.board["categories"][0]["id"]
             control = {
                 "id": new_control_id(),
                 "param": param,
                 "ptype": ptype,
                 "kind": kind,
                 "label": label or param,
-                "cat": category if category in cat_ids else self.board["categories"][0]["id"],
+                "cat": cat,
             }
             if kind in ("slider", "int"):
                 control["min"] = vmin if vmin is not None else 0
                 control["max"] = vmax if vmax is not None else (1 if kind == "slider" else 255)
             if ptype == "Bool" and invert:
                 control["invert"] = True
-            self.board["controls"].append(control)
+            controls = self.board["controls"]
+            siblings = [i for i, c in enumerate(controls) if c["cat"] == cat]
+            if index is None or index >= len(siblings):
+                insert_at = (siblings[-1] + 1) if siblings else len(controls)
+            else:
+                insert_at = siblings[max(0, index)]
+            controls.insert(insert_at, control)
             self.store.save_board(self.board)
         self._emit_board()
         return control
@@ -252,6 +265,21 @@ class AppCore:
                 self.store.save_board(self.board)
         self._emit_board()
         return cat
+
+    def move_category(self, cat_id: str, target_id: str) -> bool:
+        """Drag & drop reorder: move cat_id to the position of target_id."""
+        with self._lock:
+            cats = self.board["categories"]
+            src = next((i for i, c in enumerate(cats) if c["id"] == cat_id), None)
+            dst = next((i for i, c in enumerate(cats) if c["id"] == target_id), None)
+            if src is None or dst is None or src == dst:
+                return False
+            cat = cats.pop(src)
+            cats.insert(dst, cat)
+            if self.avatar_id:
+                self.store.save_board(self.board)
+        self._emit_board()
+        return True
 
     def rename_category(self, cat_id: str, name: str) -> bool:
         return self._edit_category(cat_id, lambda c: c.update(name=str(name)[:60] or c["name"]))
