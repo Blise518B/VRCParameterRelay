@@ -1,5 +1,5 @@
 @echo off
-rem Builds dist\VRCParameterRelay.exe with PyInstaller.
+rem Builds dist\VRCParameterRelay-<version>.exe with PyInstaller.
 cd /d "%~dp0"
 
 if not exist .venv\Scripts\pyinstaller.exe (
@@ -8,7 +8,7 @@ if not exist .venv\Scripts\pyinstaller.exe (
 
 .venv\Scripts\pyinstaller.exe --noconfirm VRCParameterRelay.spec || goto :error
 echo.
-echo Done: dist\VRCParameterRelay.exe  (single file, share this)
+echo Done: see dist\VRCParameterRelay-*.exe  (single file, share this)
 goto :eof
 
 :error

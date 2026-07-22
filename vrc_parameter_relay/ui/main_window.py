@@ -7,11 +7,12 @@ import threading
 import urllib.request
 from typing import Any, Optional
 
-from PySide6.QtCore import QObject, QSize, Qt, Signal
+from PySide6.QtCore import QObject, QSize, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QDialog, QDockWidget, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMainWindow, QMessageBox, QPushButton, QScrollArea, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QCheckBox, QDialog, QDialogButtonBox, QDockWidget, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton,
+    QScrollArea, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__
@@ -491,10 +492,21 @@ class MainWindow(QMainWindow):
             self.update_found.emit(tag)
 
     def _show_update(self, tag: str) -> None:
+        # user chose to stay on their version and silence reminders for this one
+        if self.core.store.settings.get("skip_update_version") == tag:
+            return
         self.update_label.setText(
             f'<a href="{RELEASES_URL}" style="color:#facc15; text-decoration:none;">'
             f'⬆ Update available: {tag} — get it here</a>')
         self.update_label.setVisible(True)
+        UpdateDialog(self, tag).exec()
+
+    def open_releases(self) -> None:
+        QDesktopServices.openUrl(QUrl(RELEASES_URL))
+
+    def skip_update(self, tag: str) -> None:
+        self.core.store.set("skip_update_version", tag)
+        self.update_label.setVisible(False)
 
     # -- sharing ------------------------------------------------------------------------
 
@@ -519,6 +531,50 @@ class MainWindow(QMainWindow):
                 widget.blockSignals(False)
                 return
         self.core.set_yolo(on)
+
+
+class UpdateDialog(QDialog):
+    """Startup notification when a newer release is on GitHub."""
+
+    def __init__(self, main: "MainWindow", tag: str) -> None:
+        super().__init__(main)
+        self.main = main
+        self.tag = tag
+        self.setWindowTitle("Update available")
+        self.setMinimumWidth(420)
+        lay = QVBoxLayout(self)
+        lay.setSpacing(12)
+
+        msg = QLabel(
+            f"<b>{APP_NAME} {tag}</b> is available.<br>"
+            f"You're on v{__version__}.")
+        msg.setTextFormat(Qt.RichText)
+        lay.addWidget(msg)
+
+        self.dont_remind = QCheckBox("Don't remind me again for this version")
+        lay.addWidget(self.dont_remind)
+
+        buttons = QDialogButtonBox()
+        self.update_btn = buttons.addButton("Take me to the update",
+                                            QDialogButtonBox.AcceptRole)
+        self.update_btn.setObjectName("Primary")
+        buttons.addButton("Remind me later", QDialogButtonBox.RejectRole)
+        buttons.accepted.connect(self._go)
+        buttons.rejected.connect(self._later)
+        lay.addWidget(buttons)
+
+    def _apply_skip(self) -> None:
+        if self.dont_remind.isChecked():
+            self.main.skip_update(self.tag)
+
+    def _go(self) -> None:
+        self._apply_skip()
+        self.main.open_releases()
+        self.accept()
+
+    def _later(self) -> None:
+        self._apply_skip()
+        self.reject()
 
 
 def _fmt(value: Any) -> str:

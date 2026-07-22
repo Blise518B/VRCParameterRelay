@@ -27,6 +27,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "ngrok_domain": "",
     "share_autostart": False,
     "yolo_enabled": False,
+    "skip_update_version": "",  # release tag the user chose not to be reminded about
 }
 
 
