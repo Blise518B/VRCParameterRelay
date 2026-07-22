@@ -54,4 +54,6 @@ Python 3.10+. `build.bat` builds the exe. `tools\fake_vrchat.py` +
 
 ## License
 
-[MIT](LICENSE) — built with the help of AI.
+[MIT](LICENSE)
+
+<sub>Built with the help of AI.</sub>
