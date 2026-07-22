@@ -96,6 +96,8 @@ class VrcLink:
         self._stopped = False
         self._osc_avatar: Optional[str] = None  # last avatar announced via OSC
         self._osc_avatar_at = 0.0
+        self._sync_fails = 0  # consecutive failed HOST_INFO fetches
+        self._last_vrchat_http: Optional[str] = None  # for reconnect probing
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -240,6 +242,8 @@ class VrcLink:
 
     def _vrchat_service_found(self, url: Optional[str]) -> None:
         self.vrchat_http = url
+        self._last_vrchat_http = url  # None on a real mDNS goodbye
+        self._sync_fails = 0
         if url:
             threading.Thread(target=self._sync_from_vrchat, name="oscq-sync", daemon=True).start()
         self._emit_status()
@@ -267,6 +271,17 @@ class VrcLink:
         try:
             if self.vrchat_http:
                 self._sync_from_vrchat()
+            elif self._last_vrchat_http:
+                # VRChat marked gone after failed fetches, but mDNS never said
+                # goodbye — probe the last-known URL in case it's back (or the
+                # disconnect was a false alarm from a long loading screen).
+                if self._http_json(self._last_vrchat_http + "/?HOST_INFO"):
+                    log.info("VRChat's OSCQuery service is responding again")
+                    self._vrchat_service_found(self._last_vrchat_http)
+                else:
+                    self._emit_status()
+            else:
+                self._emit_status()  # keep the UI's 'receiving' staleness fresh
         finally:
             self._schedule_poll()
 
@@ -283,13 +298,26 @@ class VrcLink:
         if not base:
             return
         host_info = self._http_json(base + "/?HOST_INFO")
-        if host_info and host_info.get("OSC_PORT"):
+        if host_info is None:
+            # VRChat quit without an mDNS goodbye (its record TTL can keep the
+            # service "alive" in the cache for a long time) — after two
+            # consecutive failures, treat it as disconnected. The poll keeps
+            # probing the last-known URL in case it comes back.
+            self._sync_fails += 1
+            if self._sync_fails >= 2 and self.vrchat_http:
+                log.info("VRChat's OSCQuery service stopped responding — disconnected")
+                self.vrchat_http = None
+            self._emit_status()
+            return
+        self._sync_fails = 0
+        if host_info.get("OSC_PORT"):
             target = (host_info.get("OSC_IP") or "127.0.0.1", int(host_info["OSC_PORT"]))
             if target != self._send_target:
                 self._send_target = target
                 self._make_client()
         tree = self._http_json(base + "/")
         if not tree:
+            self._emit_status()
             return
         avatar_id, params = oscquery.parse_vrc_tree(tree)
         if (avatar_id and self._osc_avatar and avatar_id != self._osc_avatar

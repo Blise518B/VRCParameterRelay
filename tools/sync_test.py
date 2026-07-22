@@ -120,6 +120,42 @@ def main() -> None:
              lambda: syncs2 and syncs2[-1] == "avtr_C", 5)
     link2.stop()
 
+    # --- disconnect detection + reconnect probing -----------------------------
+    fake2 = FakeTree()
+    port2 = fake2.server.server_address[1]
+    link3 = VrcLink(store)
+    statuses: list = []
+    link3.on_full_sync = lambda *a: None
+    link3.on_status = statuses.append
+    link3.vrchat_http = fake2.url
+    link3._last_vrchat_http = fake2.url
+
+    link3._sync_from_vrchat()
+    check("connected while fake is up", link3.status()["vrchat_found"] is True)
+
+    fake2.server.shutdown()  # VRChat "quits" without an mDNS goodbye
+    fake2.server.server_close()  # actually release the port
+    time.sleep(0.3)
+    link3._sync_from_vrchat()  # failure 1
+    check("still connected after one failed fetch", link3.vrchat_http is not None)
+    link3._sync_from_vrchat()  # failure 2 -> disconnected
+    check("marked disconnected after two failures", link3.vrchat_http is None)
+    check("status broadcast says not found",
+          statuses and statuses[-1]["vrchat_found"] is False)
+
+    # VRChat "restarts" on the same port -> the poll probe reconnects
+    fake3 = FakeTree.__new__(FakeTree)
+    fake3.avatar = "avtr_D"
+    fake3.params = {"Delta": ("T", False)}
+    handler3 = type("H3", (Handler,), {"holder": fake3})
+    fake3.server = ThreadingHTTPServer(("127.0.0.1", port2), handler3)
+    threading.Thread(target=fake3.server.serve_forever, daemon=True).start()
+    link3._poll_tick()  # probe runs synchronously inside the tick
+    check("probe reconnects when the service returns", link3.vrchat_http is not None)
+    link3.stop()
+    fake3.server.shutdown()
+    fake3.server.server_close()
+
     # --- core event gating ---------------------------------------------------
     class StubLink:
         on_param = on_avatar = on_full_sync = on_status = None
