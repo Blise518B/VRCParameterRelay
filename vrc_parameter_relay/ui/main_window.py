@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__
 from .dialogs import ControlDialog, ShareDialog
-from .widgets import CategoryBox, ControlCard, ParamTree
+from .widgets import CategoryBox, ControlCard, ParamTree, drag_ghost
 
 RELEASES_URL = f"{GITHUB_URL}/VRCParameterRelay/releases"
 LATEST_API = "https://api.github.com/repos/Blise518B/VRCParameterRelay/releases/latest"
@@ -315,12 +315,14 @@ class MainWindow(QMainWindow):
         self.board_name.setText(board.get("name") or "")
         self.avatar_label.setText(board.get("avatar_id") or "waiting for VRChat…")
 
+        self._cat_ghost = None  # cleared with the layouts below
         for col in self.col_layouts:
             while col.count():
                 item = col.takeAt(0)
                 if item.widget():
                     item.widget().deleteLater()
         self.cards.clear()
+        self.boxes: dict[str, CategoryBox] = {}
 
         has_avatar = board.get("avatar_id") is not None
         self.empty_label.setVisible(not has_avatar)
@@ -337,6 +339,9 @@ class MainWindow(QMainWindow):
             box.control_dropped.connect(self.core.move_control_to_category)
             box.param_dropped.connect(self._param_dropped)
             box.category_dropped.connect(self.core.move_category)
+            box.category_drag_over.connect(self._show_cat_ghost)
+            box.category_drag_done.connect(self._clear_cat_ghost)
+            self.boxes[category["id"]] = box
             for control in board["controls"]:
                 if control.get("cat") != category["id"]:
                     continue
@@ -352,6 +357,40 @@ class MainWindow(QMainWindow):
         # in single-column mode the empty second column must not eat width
         self.board_cols_layout.setStretch(0, 1)
         self.board_cols_layout.setStretch(1, 1 if self._board_cols == 2 else 0)
+
+    # -- category drag ghost (half-transparent landing preview) --------------------
+
+    _cat_ghost: Optional[QLabel] = None
+
+    def _show_cat_ghost(self, dragged_id: str, target_id: str) -> None:
+        if dragged_id == target_id:
+            self._clear_cat_ghost()
+            return
+        pixmap = drag_ghost()
+        target_box = self.boxes.get(target_id)
+        if pixmap is None or target_box is None:
+            return
+        for col in self.col_layouts:
+            for i in range(col.count()):
+                if col.itemAt(i).widget() is target_box:
+                    if (self._cat_ghost is not None
+                            and col.indexOf(self._cat_ghost) == i - 1):
+                        return  # already previewing this slot
+                    self._clear_cat_ghost()
+                    label = QLabel()
+                    label.setPixmap(pixmap)
+                    col.insertWidget(i, label)
+                    self._cat_ghost = label
+                    return
+
+    def _clear_cat_ghost(self) -> None:
+        if self._cat_ghost is not None:
+            try:
+                self._cat_ghost.setParent(None)
+                self._cat_ghost.deleteLater()
+            except RuntimeError:
+                pass  # already deleted by a board rebuild
+            self._cat_ghost = None
 
     def _delete_category(self, cat_id: str) -> None:
         board = self.core.board

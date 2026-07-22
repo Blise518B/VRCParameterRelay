@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QDrag
+from PySide6.QtGui import QDrag, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QMenu,
     QPushButton, QSlider, QSpinBox, QToolButton, QTreeWidget, QVBoxLayout,
@@ -17,6 +17,32 @@ MIME_PARAM = "application/x-vrc-parameter-relay-param"          # new control fr
 MIME_CATEGORY = "application/x-vrc-parameter-relay-category"    # reorder category
 CONTROL_H = 34  # uniform height for every control widget on a card
 
+# While a drag is running, drop targets show a half-transparent copy of the
+# dragged thing at the prospective landing spot. The pixmap travels through
+# this module-level slot (drags never cross the process boundary).
+_GHOST_PIXMAP: Optional[QPixmap] = None
+
+
+def register_drag_ghost(source: QPixmap) -> None:
+    global _GHOST_PIXMAP
+    ghost = QPixmap(source.size())
+    ghost.setDevicePixelRatio(source.devicePixelRatio())
+    ghost.fill(Qt.transparent)
+    painter = QPainter(ghost)
+    painter.setOpacity(0.5)
+    painter.drawPixmap(0, 0, source)
+    painter.end()
+    _GHOST_PIXMAP = ghost
+
+
+def clear_drag_ghost() -> None:
+    global _GHOST_PIXMAP
+    _GHOST_PIXMAP = None
+
+
+def drag_ghost() -> Optional[QPixmap]:
+    return _GHOST_PIXMAP
+
 
 class ParamTree(QTreeWidget):
     """Parameter list whose rows can be dragged into category boxes."""
@@ -27,11 +53,21 @@ class ParamTree(QTreeWidget):
             return
         name = item.data(0, Qt.UserRole)
         ptype = item.data(1, Qt.UserRole) or "Float"
+        # preview of the control this drop would create
+        kind = {"Bool": "toggle", "Int": "int"}.get(ptype, "slider")
+        preview = ControlCard({"id": "__ghost__", "param": name, "ptype": ptype,
+                               "kind": kind, "label": name.split("/")[-1]})
+        pixmap = preview.grab()
+        preview.deleteLater()
+        register_drag_ghost(pixmap)
         mime = QMimeData()
         mime.setData(MIME_PARAM, f"{name}\n{ptype}".encode())
         drag = QDrag(self)
         drag.setMimeData(mime)
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(QPoint(20, 20))
         drag.exec(Qt.CopyAction)
+        clear_drag_ghost()
 
 
 class FlowLayout(QLayout):
@@ -45,6 +81,12 @@ class FlowLayout(QLayout):
 
     def addItem(self, item) -> None:
         self._items.append(item)
+
+    def insert_widget(self, index: int, widget: QWidget) -> None:
+        """Add a widget at a specific position (used for the drop ghost)."""
+        self.addWidget(widget)  # appends + reparents
+        self._items.insert(index, self._items.pop())
+        self.invalidate()
 
     def count(self) -> int:
         return len(self._items)
@@ -74,6 +116,8 @@ class FlowLayout(QLayout):
     def minimumSize(self) -> QSize:
         size = QSize()
         for item in self._items:
+            if item.isEmpty():
+                continue  # hidden widgets (e.g. a card mid-drag) take no space
             size = size.expandedTo(item.minimumSize())
         m = self.contentsMargins()
         return size + QSize(m.left() + m.right(), m.top() + m.bottom())
@@ -84,6 +128,8 @@ class FlowLayout(QLayout):
         line_height = 0
         right = rect.right() - m.right()
         for item in self._items:
+            if item.isEmpty():
+                continue  # hidden widgets (e.g. a card mid-drag) take no space
             hint = item.sizeHint()
             if x + hint.width() > right and line_height > 0:
                 x = rect.x() + m.left()
@@ -270,12 +316,21 @@ class ControlCard(QFrame):
                 >= QApplication.startDragDistance()):
             mime = QMimeData()
             mime.setData(MIME_CONTROL, self.control["id"].encode())
+            pixmap = self.grab()
+            register_drag_ghost(pixmap)
             drag = QDrag(self)
             drag.setMimeData(mime)
-            drag.setPixmap(self.grab())
+            drag.setPixmap(pixmap)
             drag.setHotSpot(self._press_pos)
             self._press_pos = None
+            self.hide()  # the ghost shows where it lands; the original vanishes
             drag.exec(Qt.MoveAction)
+            clear_drag_ghost()
+            try:
+                self.show()  # cancelled drag: put the card back
+            except RuntimeError:
+                pass  # a successful drop rebuilt the board and deleted us
+            return  # don't touch self after a possible rebuild
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
@@ -292,6 +347,8 @@ class CategoryBox(QFrame):
     control_dropped = Signal(str, str, int)  # control_id, cat_id, index
     param_dropped = Signal(str, str, str, int)   # param, ptype, cat_id, index
     category_dropped = Signal(str, str)      # dragged_cat_id, target_cat_id
+    category_drag_over = Signal(str, str)    # dragged_cat_id, hovered_cat_id
+    category_drag_done = Signal()            # drag ended (any outcome)
 
     def __init__(self, category: dict[str, Any]) -> None:
         super().__init__()
@@ -299,6 +356,9 @@ class CategoryBox(QFrame):
         self.setObjectName("Category")
         self.setAcceptDrops(True)
         self._cat_press: QPoint | None = None
+        self._ghost: Optional[QLabel] = None
+        self._ghost_at = -1
+        self._ghost_pos: QPoint | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 10)
@@ -375,10 +435,20 @@ class CategoryBox(QFrame):
                     self._cat_press = None
                     mime = QMimeData()
                     mime.setData(MIME_CATEGORY, self.category["id"].encode())
+                    pixmap = self.grab()
+                    register_drag_ghost(pixmap)
                     drag = QDrag(self)
                     drag.setMimeData(mime)
-                    drag.setPixmap(self.grab())
+                    drag.setPixmap(pixmap)
+                    self.hide()  # the ghost shows the landing slot instead
                     drag.exec(Qt.MoveAction)
+                    clear_drag_ghost()
+                    try:
+                        self.show()  # cancelled drag: bring the box back
+                        self.category_drag_done.emit()
+                    except RuntimeError:
+                        pass  # successful drop rebuilt the board
+                    return True
             elif event.type() == QEvent.MouseButtonRelease:
                 self._cat_press = None
         return super().eventFilter(obj, event)
@@ -393,13 +463,28 @@ class CategoryBox(QFrame):
     def dragEnterEvent(self, event) -> None:
         if self._accepts(event):
             event.acceptProposedAction()
+            self._drag_update(event)
 
     def dragMoveEvent(self, event) -> None:
         if self._accepts(event):
             event.acceptProposedAction()
+            self._drag_update(event)
+
+    def dragLeaveEvent(self, event) -> None:
+        self._remove_ghost()
+
+    def _drag_update(self, event) -> None:
+        md = event.mimeData()
+        if md.hasFormat(MIME_CATEGORY):
+            dragged = bytes(md.data(MIME_CATEGORY)).decode()
+            self.category_drag_over.emit(dragged, self.category["id"])
+            return
+        pos = self.cards_host.mapFrom(self, event.position().toPoint())
+        self._show_ghost(pos)
 
     def dropEvent(self, event) -> None:
         md = event.mimeData()
+        self._remove_ghost()
         if md.hasFormat(MIME_CATEGORY):
             dragged = bytes(md.data(MIME_CATEGORY)).decode()
             event.acceptProposedAction()
@@ -418,12 +503,60 @@ class CategoryBox(QFrame):
             self.param_dropped.emit(param, ptype, self.category["id"], index)
 
     def _insert_index(self, pos: QPoint) -> int:
-        """Row-major insertion point among the cards in this box."""
+        """Row-major insertion point among the visible cards in this box.
+
+        The ghost label and a mid-drag hidden source card are skipped, so the
+        index matches the model's sibling order.
+        """
+        index = 0
         for i in range(self.flow.count()):
             widget = self.flow.itemAt(i).widget()
+            if widget is self._ghost or not widget.isVisible():
+                continue
             r = widget.geometry()
             if pos.y() < r.top():
-                return i
+                return index
             if pos.y() <= r.bottom() and pos.x() < r.center().x():
-                return i
-        return self.flow.count()
+                return index
+            index += 1
+        return index
+
+    # -- drop-position ghost ------------------------------------------------------
+
+    def _show_ghost(self, pos: QPoint) -> None:
+        pixmap = drag_ghost()
+        if pixmap is None:
+            return
+        index = self._insert_index(pos)
+        if self._ghost is not None:
+            if index == self._ghost_at:
+                return
+            # hysteresis: don't flip the ghost around for tiny cursor moves
+            if (self._ghost_pos is not None
+                    and (pos - self._ghost_pos).manhattanLength() < 10):
+                return
+        self._remove_ghost()
+        label = QLabel()
+        label.setPixmap(pixmap)
+        # translate the visible-card index into a flow-item position
+        flow_pos = self.flow.count()
+        seen = 0
+        for i in range(self.flow.count()):
+            widget = self.flow.itemAt(i).widget()
+            if not widget.isVisible():
+                continue
+            if seen == index:
+                flow_pos = i
+                break
+            seen += 1
+        self.flow.insert_widget(flow_pos, label)
+        self._ghost, self._ghost_at, self._ghost_pos = label, index, pos
+        self.hint.setVisible(False)
+
+    def _remove_ghost(self) -> None:
+        if self._ghost is not None:
+            self.flow.removeWidget(self._ghost)
+            self._ghost.deleteLater()
+            self._ghost = None
+            self._ghost_at = -1
+            self._ghost_pos = None
