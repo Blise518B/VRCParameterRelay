@@ -13,10 +13,12 @@ property on the frame); the variants for both themes are generated below.
 """
 
 # Accent per theme, for the few inline rich-text bits the UI draws itself.
+# "neon"  = the brighter, thicker classic look (default).
+# "broker" = "Midnight": darker background, thinner/muted borders.
 ACCENTS = {"broker": "#4af58c", "neon": "#31f272"}
-THEME_LABELS = {"broker": "Broker (default)", "neon": "Classic neon"}
-THEME_ORDER = ["broker", "neon"]
-DEFAULT_THEME = "broker"
+THEME_LABELS = {"neon": "Neon (default)", "broker": "Midnight"}
+THEME_ORDER = ["neon", "broker"]
+DEFAULT_THEME = "neon"
 
 # Selectable UI fonts, grouped by general type for the picker. Missing system
 # families fall back to Segoe UI, so it's safe to offer Office/Win11 fonts;
@@ -24,30 +26,14 @@ DEFAULT_THEME = "broker"
 # (group title, [(family, one-line note), ...])
 DEFAULT_FONT = "Segoe UI"
 FONT_GROUPS = [
-    ("Clean & modern", [
+    ("Clean & rounded", [
         ("Segoe UI", "clean modern sans — the default"),
-        ("Segoe UI Variable", "refined, softer — Mac-like (Win 11)"),
-        ("Dubai", "clean, even, modern"),
-    ]),
-    ("Rounded & friendly", [
-        ("Corbel", "soft, gently rounded"),
         ("Century Gothic", "very round, geometric"),
-        ("Trebuchet MS", "rounded, friendly"),
     ]),
     ("Sci-fi & techno (bundled)", [
         ("Orbitron", "wide geometric, slashed zeros"),
-        ("Michroma", "wide, clean, even"),
-        ("Rajdhani", "condensed HUD — readable"),
-        ("Chakra Petch", "squarish, techy"),
-        ("Exo 2", "modern, versatile"),
         ("Aldrich", "square techno"),
         ("Audiowide", "retro-futuristic, rounded"),
-        ("Electrolize", "clean straight techno"),
-    ]),
-    ("Condensed & mono", [
-        ("Bahnschrift", "condensed, technical"),
-        ("Cascadia Code", "coding mono"),
-        ("Consolas", "classic mono"),
     ]),
 ]
 # flat list of (family, note), for anything that just needs every choice

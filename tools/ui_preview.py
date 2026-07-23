@@ -64,7 +64,7 @@ def main() -> int:
     parser.add_argument("--screenshot")
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--yolo", action="store_true")
-    parser.add_argument("--theme", default="broker")
+    parser.add_argument("--theme", default="neon")
     parser.add_argument("--font", help="dev: override the UI font family")
     args = parser.parse_args()
 

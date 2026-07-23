@@ -30,7 +30,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "skip_update_version": "",  # release tag the user chose not to be reminded about
     "window_size": None,        # [w, h] of the main window, restored on start
     "window_maximized": False,
-    "theme": "broker",          # UI theme: "broker" (default) or "neon"
+    "theme": "neon",            # UI theme: "neon" (default) or "broker" (Midnight)
     "font": "Segoe UI",         # UI font family
 }
 

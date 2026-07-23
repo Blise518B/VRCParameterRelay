@@ -839,9 +839,10 @@ clamped to safe ranges). It stays on until you turn it off.</p>
 
 <h2>Appearance</h2>
 <p>The ⚙ gear in the top-right opens <b>Settings</b>, with two sections:
-<b>Design</b> — the colour scheme (<i>Broker</i>, the default, or
-<i>Classic neon</i>) — and <b>Font</b>, a live typeface picker (each row is
-shown in its own font). Changes apply instantly and are remembered.</p>
+<b>Design</b> — the colour scheme (<i>Neon</i>, the brighter default, or
+<i>Midnight</i>, a darker look with thinner borders) — and <b>Font</b>, a
+live typeface picker (each row is shown in its own font). Changes apply
+instantly and are remembered.</p>
 
 <h2>Data &amp; updates</h2>
 <p>Boards and settings live in <code>%APPDATA%\\VRCParameterRelay</code>.
