@@ -319,9 +319,13 @@ class MainWindow(QMainWindow):
         self.tree.itemDoubleClicked.connect(self._add_from_item)
         lay.addWidget(self.tree)
 
-        hint = QLabel("Values update live from VRChat.")
-        hint.setStyleSheet("color:#6d6d82; font-size:11px;")
+        hint = QLabel("Double-click or drag a parameter to assign it to a group.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#8ba58f; font-size:12px;")
         lay.addWidget(hint)
+        values_note = QLabel("Values update live from VRChat.")
+        values_note.setStyleSheet("color:#6d6d82; font-size:11px;")
+        lay.addWidget(values_note)
 
         self.params_dock.setWidget(inner)
         self.params_dock.setMinimumWidth(300)
