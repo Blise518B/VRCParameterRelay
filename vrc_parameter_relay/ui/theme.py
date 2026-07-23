@@ -38,9 +38,10 @@ QPushButton#Primary:hover { background: #62ff97; }
 QPushButton#Danger { color: #f87171; border-color: #542a2a; }
 
 QPushButton#SyncBtn {
-    font-family: 'Segoe MDL2 Assets', 'Segoe Fluent Icons';
-    font-size: 14px; padding: 7px 0;
+    font-size: 13px; font-weight: 600; padding: 5px 14px;
+    color: #cfe3d4; border-color: %(edge)s;
 }
+QPushButton#SyncBtn:hover { background: #142418; color: #eafff0; }
 
 QLabel#LiveBadge {
     border-radius: 9px; padding: 1px 9px; font-size: 11px; font-weight: 700;
@@ -111,7 +112,6 @@ QPushButton#DockToggle:hover { background: #1c8a3d; color: #eafff0; }
 
 #DockTitle { background: #0f120f; border-bottom: 1px solid %(edge)s; }
 QLabel#DockTitleText { font-weight: 600; font-size: 14px; color: #cfe3d4; }
-QLabel#DockTitleHint { color: #5d7a63; font-size: 11px; }
 
 QScrollArea { border: none; background: transparent; }
 #BoardArea { background: #0a0c0a; }

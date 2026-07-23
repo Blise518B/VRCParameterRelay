@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
             "ignoring category locks. Stays on until you turn it off — even after restarts.")
         self.yolo_btn.toggled.connect(lambda on: self.request_yolo(on, self.yolo_btn))
 
-        sync_btn = QPushButton("", objectName="SyncBtn")  # Segoe MDL2 refresh glyph
+        sync_btn = QPushButton("⟳ Resync", objectName="SyncBtn")
         sync_btn.setToolTip("Re-sync avatar && parameters from VRChat now")
         sync_btn.clicked.connect(lambda: self.core.link.refetch())
         self.sync_btn = sync_btn  # placed in the parameter panel's title bar
@@ -287,10 +287,8 @@ class MainWindow(QMainWindow):
         tl.setContentsMargins(14, 0, 14, 0)
         tl.addWidget(QLabel("Avatar parameters", objectName="DockTitleText"))
         tl.addStretch(1)
-        hint = QLabel("double-click or drag", objectName="DockTitleHint")
-        hint.setToolTip("Double-click a parameter or drag it onto a category to add it")
-        tl.addWidget(hint)
-        self.sync_btn.setFixedSize(32, 28)
+        self.sync_btn.setFixedHeight(30)
+        self.sync_btn.setCursor(Qt.PointingHandCursor)
         tl.addWidget(self.sync_btn)
         self.params_dock.setTitleBarWidget(title_bar)
 
