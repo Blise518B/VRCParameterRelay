@@ -60,7 +60,7 @@ class MainWindow(QMainWindow):
         self.guest_names: list[str] = []
 
         self.setWindowTitle(APP_NAME)
-        self.resize(1080, 640)
+        self._restore_window_size()
 
         self.bridge = CoreBridge()
         self.bridge.event.connect(self._on_event)
@@ -89,6 +89,26 @@ class MainWindow(QMainWindow):
         self._refresh_params(core.param_snapshot())
         self._refresh_pause_btn()
         self._start_update_check()
+
+    # -- window geometry ---------------------------------------------------------
+
+    def _restore_window_size(self) -> None:
+        saved = self.core.store.settings.get("window_size")
+        try:
+            w, h = int(saved[0]), int(saved[1])
+            if w < 480 or h < 360:
+                raise ValueError
+            self.resize(w, h)
+        except (TypeError, ValueError, IndexError):
+            self.resize(1080, 640)
+        if self.core.store.settings.get("window_maximized"):
+            self.setWindowState(Qt.WindowMaximized)
+
+    def closeEvent(self, event) -> None:
+        size = self.normalGeometry().size()  # pre-maximize size, not the screen's
+        self.core.store.set("window_size", [size.width(), size.height()])
+        self.core.store.set("window_maximized", self.isMaximized())
+        super().closeEvent(event)
 
     # -- layout -----------------------------------------------------------------
 
@@ -157,17 +177,15 @@ class MainWindow(QMainWindow):
             "YOLO mode: guests get the full live parameter list and can set anything,\n"
             "ignoring category locks. Stays on until you turn it off — even after restarts.")
         self.yolo_btn.toggled.connect(lambda on: self.request_yolo(on, self.yolo_btn))
-        lay.addWidget(self.yolo_btn)
 
         sync_btn = QPushButton("", objectName="SyncBtn")  # Segoe MDL2 refresh glyph
         sync_btn.setToolTip("Re-sync avatar && parameters from VRChat now")
-        sync_btn.setFixedWidth(36)
         sync_btn.clicked.connect(lambda: self.core.link.refetch())
-        lay.addWidget(sync_btn)
+        self.sync_btn = sync_btn  # placed in the parameter panel's title bar
 
-        cat_btn = QPushButton("＋ Category")
-        cat_btn.setToolTip("Add another category box to the board")
-        cat_btn.clicked.connect(lambda: self.core.add_category())
+        self.cat_btn = QPushButton("＋ Category")
+        self.cat_btn.setToolTip("Add another category box to the board")
+        self.cat_btn.clicked.connect(lambda: self.core.add_category())
         self.pause_btn = QPushButton("", objectName="PauseBtn")  # MDL2 stop
         self.pause_btn.setFixedWidth(36)
         self.pause_btn.clicked.connect(self._toggle_pause)
@@ -177,15 +195,13 @@ class MainWindow(QMainWindow):
         help_btn.setFixedWidth(34)
         help_btn.setToolTip("Help")
         help_btn.clicked.connect(lambda: HelpDialog(self).exec())
-        lay.addWidget(cat_btn)
         lay.addWidget(self.pause_btn)
         lay.addWidget(share_btn)
         lay.addWidget(help_btn)
 
         # chips are QLabels that would otherwise stretch to the header's height
-        for widget in (self.vrc_chip, self.guest_chip, self.yolo_btn, sync_btn,
-                       cat_btn, self.pause_btn, share_btn, help_btn,
-                       self.preset_combo, preset_menu_btn):
+        for widget in (self.vrc_chip, self.guest_chip, self.pause_btn, share_btn,
+                       help_btn, self.preset_combo, preset_menu_btn):
             widget.setFixedHeight(34)
 
         # full-window header (above the dock too) so its width requirement
@@ -204,6 +220,20 @@ class MainWindow(QMainWindow):
         left = QVBoxLayout()
         left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(0)
+
+        # slim toolbar above the categories — board-level actions live here so
+        # the header stays avatar/sharing state only
+        self.board_toolbar = QWidget()
+        bar = QHBoxLayout(self.board_toolbar)
+        bar.setContentsMargins(14, 10, 14, 0)
+        bar.setSpacing(8)
+        bar.addWidget(self.cat_btn)
+        bar.addWidget(self.yolo_btn)
+        bar.addStretch(1)
+        for widget in (self.cat_btn, self.yolo_btn):
+            widget.setFixedHeight(30)
+        left.addWidget(self.board_toolbar)
+
         self.board_scroll = QScrollArea(widgetResizable=True)
         self.board_container = QWidget(objectName="BoardArea")
         self.board_cols_layout = QHBoxLayout(self.board_container)
@@ -257,7 +287,11 @@ class MainWindow(QMainWindow):
         tl.setContentsMargins(14, 0, 14, 0)
         tl.addWidget(QLabel("Avatar parameters", objectName="DockTitleText"))
         tl.addStretch(1)
-        tl.addWidget(QLabel("double-click or drag to add", objectName="DockTitleHint"))
+        hint = QLabel("double-click or drag", objectName="DockTitleHint")
+        hint.setToolTip("Double-click a parameter or drag it onto a category to add it")
+        tl.addWidget(hint)
+        self.sync_btn.setFixedSize(32, 28)
+        tl.addWidget(self.sync_btn)
         self.params_dock.setTitleBarWidget(title_bar)
 
         inner = QWidget()
@@ -379,6 +413,7 @@ class MainWindow(QMainWindow):
         has_avatar = self.core.avatar_id is not None
         self.empty_label.setVisible(not has_avatar)
         self.board_scroll.setVisible(has_avatar)
+        self.board_toolbar.setVisible(has_avatar)
         if not has_avatar:
             return
 
@@ -742,9 +777,9 @@ handed out. For a link that survives app restarts, set up a free ngrok
 static domain in <i>Link settings</i>.</p>
 
 <h2>⚡ YOLO mode</h2>
-<p>The header toggle gives guests the <i>full</i> parameter list and control
-over everything, ignoring category locks (values stay clamped to safe
-ranges). It stays on until you turn it off.</p>
+<p>The ⚡ YOLO button above the board gives guests the <i>full</i> parameter
+list and control over everything, ignoring category locks (values stay
+clamped to safe ranges). It stays on until you turn it off.</p>
 
 <h2>Data &amp; updates</h2>
 <p>Boards and settings live in <code>%APPDATA%\\VRCParameterRelay</code>.
