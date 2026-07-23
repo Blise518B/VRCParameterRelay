@@ -317,7 +317,7 @@ class MainWindow(QMainWindow):
         self.tree.itemDoubleClicked.connect(self._add_from_item)
         lay.addWidget(self.tree)
 
-        hint = QLabel("Double-click or drag a parameter to assign it to a group.")
+        hint = QLabel("Double-click or drag the parameters into a group.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#8ba58f; font-size:12px;")
         lay.addWidget(hint)
