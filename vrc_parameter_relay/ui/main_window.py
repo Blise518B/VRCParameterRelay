@@ -8,16 +8,17 @@ import urllib.request
 from typing import Any, Optional
 
 from PySide6.QtCore import QObject, QSize, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QActionGroup, QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDockWidget, QHBoxLayout,
-    QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
-    QMessageBox, QPushButton, QScrollArea, QTextBrowser, QToolButton,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDockWidget,
+    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow,
+    QMenu, QMessageBox, QPushButton, QScrollArea, QTextBrowser, QToolButton,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__
 from .dialogs import ControlDialog, ShareDialog
+from .theme import DEFAULT_THEME, THEME_LABELS, THEME_ORDER, accent_of, build_qss
 from .widgets import CategoryBox, ControlCard, ParamTree, drag_ghost
 
 RELEASES_URL = f"{GITHUB_URL}/VRCParameterRelay/releases"
@@ -195,12 +196,18 @@ class MainWindow(QMainWindow):
         help_btn.setFixedWidth(34)
         help_btn.setToolTip("Help")
         help_btn.clicked.connect(lambda: HelpDialog(self).exec())
+        self.gear_btn = QToolButton(objectName="GearBtn")
+        self.gear_btn.setText("⚙")
+        self.gear_btn.setToolTip("Settings — switch the design")
+        self.gear_btn.setCursor(Qt.PointingHandCursor)
+        self.gear_btn.clicked.connect(self._show_settings_menu)
         lay.addWidget(share_btn)
         lay.addWidget(help_btn)
+        lay.addWidget(self.gear_btn)
 
         # chips are QLabels that would otherwise stretch to the header's height
         for widget in (self.vrc_chip, self.guest_chip, share_btn,
-                       help_btn, self.preset_combo, preset_menu_btn):
+                       help_btn, self.gear_btn, self.preset_combo, preset_menu_btn):
             widget.setFixedHeight(34)
 
         # full-window header (above the dock too) so its width requirement
@@ -522,8 +529,9 @@ class MainWindow(QMainWindow):
             self.live_badge.style().unpolish(self.live_badge)
             self.live_badge.style().polish(self.live_badge)
         if live:
+            accent = accent_of(self.core.store.settings.get("theme", DEFAULT_THEME))
             self.avatar_label.setText(
-                f'<span style="color:#31f272">●</span> {avatar_id}')
+                f'<span style="color:{accent}">●</span> {avatar_id}')
         elif avatar_id is not None:
             self.avatar_label.setText(
                 f'<span style="color:#c9525f">{avatar_id}</span>')
@@ -726,6 +734,32 @@ class MainWindow(QMainWindow):
         self.pause_btn.style().unpolish(self.pause_btn)
         self.pause_btn.style().polish(self.pause_btn)
 
+    # -- settings / theme -----------------------------------------------------------
+
+    def _show_settings_menu(self) -> None:
+        menu = QMenu(self)
+        title = menu.addAction("Design")
+        title.setEnabled(False)
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        current = self.core.store.settings.get("theme", DEFAULT_THEME)
+        for key in THEME_ORDER:
+            action = menu.addAction(THEME_LABELS.get(key, key))
+            action.setCheckable(True)
+            action.setChecked(key == current)
+            group.addAction(action)
+            action.triggered.connect(lambda _=False, k=key: self._set_theme(k))
+        menu.exec(self.gear_btn.mapToGlobal(self.gear_btn.rect().bottomLeft()))
+
+    def _set_theme(self, key: str) -> None:
+        if key == self.core.store.settings.get("theme"):
+            return
+        self.core.store.set("theme", key)
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(build_qss(key))  # re-polishes every widget live
+        self._refresh_avatar_header()  # the live dot uses the theme accent inline
+
     def _open_share(self) -> None:
         self.share_dialog.show()
         self.share_dialog.raise_()
@@ -788,6 +822,11 @@ static domain in <i>Link settings</i>.</p>
 <p>The ⚡ YOLO button above the board gives guests the <i>full</i> parameter
 list and control over everything, ignoring category locks (values stay
 clamped to safe ranges). It stays on until you turn it off.</p>
+
+<h2>Appearance</h2>
+<p>The ⚙ gear in the top-right switches the design between <b>Broker</b>
+(the default muted look) and <b>Classic neon</b> (the original brighter
+style). Your choice is remembered.</p>
 
 <h2>Data &amp; updates</h2>
 <p>Boards and settings live in <code>%APPDATA%\\VRCParameterRelay</code>.

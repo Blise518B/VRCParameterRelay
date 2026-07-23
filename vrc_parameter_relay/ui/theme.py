@@ -1,9 +1,26 @@
-"""Green-on-black theme shared by the whole app."""
+"""App themes.
 
-ACCENT = "#31f272"
-EDGE = "#36a35c"  # neon green border family
+Two green-on-black looks, switchable at runtime from the header gear:
+  * "broker"  (default) — a muted terminal/dashboard style adapted from the
+                GPU-broker Home Assistant dashboard: near-black blue-tinted
+                background, thin subtle green borders, minty accent, small radii.
+  * "neon"    — the original brighter neon-green style.
+"""
 
-QSS = """
+# Accent per theme, for the few inline rich-text bits the UI draws itself.
+ACCENTS = {"broker": "#4af58c", "neon": "#31f272"}
+THEME_LABELS = {"broker": "Broker (default)", "neon": "Classic neon"}
+THEME_ORDER = ["broker", "neon"]
+DEFAULT_THEME = "broker"
+
+
+# --------------------------------------------------------------------------
+# Classic neon (the original look)
+# --------------------------------------------------------------------------
+_NEON_ACCENT = "#31f272"
+_NEON_EDGE = "#36a35c"
+
+NEON_QSS = """
 * { font-family: 'Segoe UI', sans-serif; font-size: 13px; }
 
 QMainWindow, QDialog { background: #0a0c0a; }
@@ -81,6 +98,9 @@ QToolButton#AvatarMenu {
     padding: 2px 4px;
 }
 QToolButton#AvatarMenu:hover { color: #7dffab; }
+
+QToolButton#GearBtn { border: none; color: #94a698; font-size: 16px; padding: 2px 6px; }
+QToolButton#GearBtn:hover { color: #7dffab; }
 
 QComboBox#PresetCombo { padding: 5px 10px; }
 
@@ -200,4 +220,229 @@ QProgressBar {
     text-align: center; color: #e6efe8;
 }
 QProgressBar::chunk { background: %(accent)s; border-radius: 5px; }
-""" % {"accent": ACCENT, "edge": EDGE}
+""" % {"accent": _NEON_ACCENT, "edge": _NEON_EDGE}
+
+
+# --------------------------------------------------------------------------
+# Broker (default) — muted terminal-dashboard palette
+#   bg #07090c · panel #0b0f0c · border #243029 · accent #4af58c
+#   amber #ffb454 · red #ff5561 · text #c9d4cc · dim #5f6f64
+# --------------------------------------------------------------------------
+BROKER_QSS = """
+* { font-family: 'Segoe UI', sans-serif; font-size: 13px; }
+
+QMainWindow, QDialog { background: #07090c; }
+QWidget { color: #c9d4cc; }
+
+#Header { background: #090d0a; border-bottom: 1px solid #243029; }
+#BoardName {
+    background: transparent; border: none; font-size: 19px; font-weight: 700;
+    padding: 2px 4px; color: #dbe6dd; letter-spacing: 1px;
+}
+#BoardName:focus { background: #0e1712; border-radius: 3px; }
+#AvatarId { color: #5f6f64; font-size: 11px; }
+
+QLabel#Chip {
+    background: #0b0f0c; border: 1px solid #243029; border-radius: 3px;
+    padding: 0 12px; color: #7c8a80; font-size: 12px;
+}
+QLabel#Chip[state="ok"] { color: #4af58c; border-color: #2f5e3f; }
+QLabel#Chip[state="bad"] { color: #ff5561; border-color: #5c2228; }
+
+QPushButton {
+    background: transparent; border: 1px solid #243029; border-radius: 3px;
+    padding: 7px 14px; color: #c9d4cc;
+}
+QPushButton:hover { background: #0f1712; border-color: #4af58c; color: #4af58c; }
+QPushButton:pressed { background: #0b110d; }
+QPushButton#Primary {
+    background: #4af58c; border-color: #4af58c; font-weight: 700; color: #04120a;
+}
+QPushButton#Primary:hover { background: #7dffb0; border-color: #7dffb0; color: #04120a; }
+QPushButton#Danger { color: #ff5561; border-color: #5c2228; }
+QPushButton#Danger:hover { background: #170a0c; border-color: #ff5561; color: #ff5561; }
+
+QPushButton#SyncBtn {
+    font-size: 13px; font-weight: 600; padding: 5px 14px;
+    color: #9fb3a6; border-color: #243029;
+}
+QPushButton#SyncBtn:hover { background: #0f1712; color: #4af58c; border-color: #4af58c; }
+
+QLabel#LiveBadge {
+    border-radius: 3px; padding: 1px 9px; font-size: 11px; font-weight: 700;
+    letter-spacing: 1px;
+}
+QLabel#LiveBadge[state="live"] {
+    background: #0c2417; color: #4af58c; border: 1px solid #2f5e3f;
+}
+QLabel#LiveBadge[state="offline"] {
+    background: #250c10; color: #ff5561; border: 1px solid #5c2228;
+}
+
+QPushButton#PauseBtn {
+    font-size: 13px; font-weight: 700; padding: 6px 18px; letter-spacing: 1px;
+    color: #ff5561; border-color: #5c2228; background: transparent;
+}
+QPushButton#PauseBtn:hover { background: #170a0c; }
+QPushButton#PauseBtn[state="active"] {
+    color: #ffe1e5; border-color: #b23140; background: #6e141f;
+}
+QPushButton#PauseBtn[state="active"]:hover { background: #86202c; }
+QPushButton#PauseBtn[state="paused"] {
+    color: #ffb454; border-color: #6b5320; background: #241a0a;
+}
+QPushButton#PauseBtn[state="paused"]:hover { background: #322611; }
+QPushButton#PauseBtn:disabled { color: #3f4a42; border-color: #1c2620; background: transparent; }
+
+QPushButton#ChipBtn {
+    background: #0b0f0c; border: 1px solid #243029; border-radius: 3px;
+    padding: 0 12px; color: #7c8a80; font-size: 12px;
+}
+QPushButton#ChipBtn:hover { background: #0f1712; color: #4af58c; border-color: #4af58c; }
+
+QPushButton#HelpBtn { font-weight: 700; padding: 7px 0; }
+
+QToolButton#AvatarMenu {
+    border: none; color: #4af58c; font-size: 13px; font-weight: 700;
+    padding: 2px 4px;
+}
+QToolButton#AvatarMenu:hover { color: #7dffb0; }
+
+QToolButton#GearBtn { border: none; color: #7c8a80; font-size: 16px; padding: 2px 6px; }
+QToolButton#GearBtn:hover { color: #4af58c; }
+
+QComboBox#PresetCombo { padding: 5px 10px; }
+
+QPushButton#YoloToggle {
+    border: 1px solid #4a3a1c; color: #b0895a; font-weight: 600; padding: 7px 12px;
+}
+QPushButton#YoloToggle:hover { background: #1a1408; color: #ffb454; border-color: #ffb454; }
+QPushButton#YoloToggle:checked {
+    background: #6b4310; border-color: #ffb454; color: #ffe6c2;
+}
+QPushButton#YoloToggle:checked:hover { background: #7c4f14; }
+
+QMainWindow::separator { width: 4px; background: #243029; }
+QMainWindow::separator:hover { background: #4af58c; }
+
+QPushButton#DockToggle {
+    border: 1px solid #243029; border-right: none;
+    border-top-left-radius: 4px; border-bottom-left-radius: 4px;
+    border-top-right-radius: 0; border-bottom-right-radius: 0;
+    background: #0e1712; color: #4af58c; font-weight: 800; font-size: 15px;
+    padding: 0;
+}
+QPushButton#DockToggle:hover { background: #14311f; color: #dffbe9; }
+
+#DockTitle { background: #090d0a; border-bottom: 1px solid #243029; }
+QLabel#DockTitleText { font-weight: 700; font-size: 14px; color: #b7c9bd; letter-spacing: 1px; }
+
+QScrollArea { border: none; background: transparent; }
+#BoardArea { background: #07090c; }
+
+QFrame#Card {
+    background: #0b0f0c; border: 1px solid #243029; border-radius: 4px;
+}
+QLabel#CardLabel { font-weight: 600; font-size: 13px; }
+QLabel#CardValue { color: #5f6f64; font-size: 11px; }
+QLabel#CardGrip { color: #3f6b50; font-size: 14px; }
+QLabel#CardInv { color: #ffb454; font-size: 13px; font-weight: 700; }
+QToolButton#CardMenu { border: none; color: #4af58c; font-size: 16px; padding: 0 4px; }
+QToolButton#CardMenu:hover { color: #7dffb0; }
+
+QFrame#Category {
+    background: #090c0a; border: 1px solid #243029; border-radius: 4px;
+}
+QWidget#CatHeader { background: #0e1611; border-radius: 3px; border: 1px solid #223a2c; }
+QLabel#CatGrip { color: #4af58c; font-size: 14px; padding: 0 2px; }
+QLineEdit#CatName {
+    background: transparent; border: none; font-size: 14px; font-weight: 700;
+    padding: 2px 4px; color: #6ff0a0; letter-spacing: 1px;
+}
+QLineEdit#CatName:focus { background: #10241a; border-radius: 3px; }
+QToolButton#CatLock { border: none; font-size: 14px; padding: 0 6px; }
+QLabel#CatHint {
+    color: #5d7a63; font-size: 12px; padding: 16px;
+    border: 1px dashed #243029; border-radius: 4px;
+}
+
+QPushButton#Switch {
+    background: #8f2233; border: none; border-radius: 3px;
+    min-width: 120px; font-weight: 700; color: #ffd9de;
+}
+QPushButton#Switch:checked { background: #4af58c; color: #04120a; font-weight: 700; }
+QPushButton#Switch:disabled { color: #8a6d72; }
+
+QPushButton#Push {
+    background: rgba(74, 245, 140, 0.12); border: 1px solid #4af58c;
+    border-radius: 3px; font-weight: 600;
+}
+QPushButton#Push:pressed { background: #4af58c; color: #04120a; }
+
+QSlider::groove:horizontal { height: 4px; background: #1b3326; border-radius: 2px; }
+QSlider::handle:horizontal {
+    width: 14px; height: 14px; margin: -6px 0; border-radius: 3px; background: #4af58c;
+}
+QSlider::sub-page:horizontal { background: #35b56a; border-radius: 2px; }
+
+QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox {
+    background: #0a0e0b; border: 1px solid #243029; border-radius: 3px; padding: 5px 8px;
+    selection-background-color: #4af58c;
+    selection-color: #04120a;
+}
+QComboBox::drop-down { border: none; width: 22px; }
+QComboBox QAbstractItemView {
+    background: #0a0e0b; border: 1px solid #243029; selection-background-color: #14311f;
+}
+
+QDockWidget { color: #7c8a80; }
+
+QTreeWidget {
+    background: #090d0a; border: none; alternate-background-color: #0c110e;
+}
+QTreeWidget::item { height: 26px; padding-left: 6px; }
+QTreeWidget::item:selected { background: #14311f; }
+QHeaderView::section {
+    background: #090d0a; border: none; border-bottom: 1px solid #243029;
+    padding: 6px 8px; color: #6f8074;
+}
+QHeaderView::section:first { padding-left: 14px; }
+
+QStatusBar {
+    background: #090d0a; color: #5f6f64; font-size: 11px;
+    border-top: 1px solid #243029;
+}
+QStatusBar::item { border: none; }
+QMenu { background: #0b0f0c; border: 1px solid #243029; padding: 4px; }
+QMenu::item { padding: 6px 22px; border-radius: 3px; }
+QMenu::item:selected { background: #14311f; }
+
+QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: #2f4436; border-radius: 3px; min-height: 30px; }
+QScrollBar::handle:vertical:hover { background: #4af58c; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+QProgressBar {
+    background: #0a0e0b; border: 1px solid #243029; border-radius: 3px;
+    text-align: center; color: #c9d4cc;
+}
+QProgressBar::chunk { background: #4af58c; border-radius: 2px; }
+"""
+
+
+THEMES = {"broker": BROKER_QSS, "neon": NEON_QSS}
+
+
+def build_qss(theme: str = DEFAULT_THEME) -> str:
+    """Full stylesheet for a theme name (falls back to the default)."""
+    return THEMES.get(theme, THEMES[DEFAULT_THEME])
+
+
+def accent_of(theme: str = DEFAULT_THEME) -> str:
+    """Accent colour for a theme, for inline rich-text the UI draws itself."""
+    return ACCENTS.get(theme, ACCENTS[DEFAULT_THEME])
+
+
+# Backwards-compat: some tools import QSS directly (defaults to the broker look).
+QSS = build_qss()

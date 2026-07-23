@@ -63,6 +63,7 @@ def main() -> int:
     parser.add_argument("--screenshot")
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--yolo", action="store_true")
+    parser.add_argument("--theme", default="broker")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(name)s: %(message)s")
@@ -75,10 +76,11 @@ def main() -> int:
     from vrc_parameter_relay.store import Store
     from vrc_parameter_relay.tunnel import Tunnel
     from vrc_parameter_relay.ui.main_window import MainWindow
-    from vrc_parameter_relay.ui.theme import QSS
+    from vrc_parameter_relay.ui.theme import build_qss
     from vrc_parameter_relay.webserver import GuestServer
 
     store = Store()
+    store.set("theme", args.theme)
     link = StubLink()
     core = AppCore(store, link)
     web = GuestServer(core, store.settings["web_port"])
@@ -92,7 +94,7 @@ def main() -> int:
 
     app = QApplication(sys.argv[:1])
     app.setStyle("Fusion")
-    app.setStyleSheet(QSS)
+    app.setStyleSheet(build_qss(args.theme))
     window = MainWindow(core, tunnel, web)
     window.show()
     import time
