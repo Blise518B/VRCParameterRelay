@@ -294,11 +294,17 @@ class MainWindow(QMainWindow):
 
         inner = QWidget()
         lay = QVBoxLayout(inner)
-        lay.setContentsMargins(12, 10, 12, 10)
+        # no side margins: the parameter table runs edge to edge; the search
+        # box and the hints below get their own inset instead
+        lay.setContentsMargins(0, 10, 0, 10)
+        lay.setSpacing(8)
 
+        search_row = QHBoxLayout()
+        search_row.setContentsMargins(12, 0, 12, 0)
         self.search = QLineEdit(placeholderText="Filter parameters…")
         self.search.textChanged.connect(self._apply_filter)
-        lay.addWidget(self.search)
+        search_row.addWidget(self.search)
+        lay.addLayout(search_row)
 
         self.tree = ParamTree()
         self.tree.setHeaderLabels(["Parameter", "Type", "Value"])
@@ -319,10 +325,10 @@ class MainWindow(QMainWindow):
 
         hint = QLabel("Double-click or drag the parameters into a group.")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color:#8ba58f; font-size:12px;")
+        hint.setStyleSheet("color:#8ba58f; font-size:12px; padding:0 12px;")
         lay.addWidget(hint)
         values_note = QLabel("Values update live from VRChat.")
-        values_note.setStyleSheet("color:#6d6d82; font-size:11px;")
+        values_note.setStyleSheet("color:#6d6d82; font-size:11px; padding:0 12px;")
         lay.addWidget(values_note)
 
         self.params_dock.setWidget(inner)

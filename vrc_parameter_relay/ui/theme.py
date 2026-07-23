@@ -94,10 +94,8 @@ QPushButton#YoloToggle:checked {
 QPushButton#YoloToggle:checked:hover { background: #8a4d12; }
 
 QMainWindow::separator {
-    width: 7px;
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 #0a0c0a, stop:0.42 #0a0c0a, stop:0.5 %(edge)s,
-        stop:0.58 #0a0c0a, stop:1 #0a0c0a);
+    width: 4px;
+    background: %(edge)s;  /* solid line so the pull-tab meets it flush */
 }
 QMainWindow::separator:hover { background: %(accent)s; }
 
@@ -174,12 +172,13 @@ QDockWidget { color: #94a698; }
 QTreeWidget {
     background: #0f120f; border: none; alternate-background-color: #121712;
 }
-QTreeWidget::item { height: 26px; }
+QTreeWidget::item { height: 26px; padding-left: 6px; }
 QTreeWidget::item:selected { background: #1b5a30; }
 QHeaderView::section {
     background: #0f120f; border: none; border-bottom: 1px solid %(edge)s;
-    padding: 6px; color: #7f8f81;
+    padding: 6px 8px; color: #7f8f81;
 }
+QHeaderView::section:first { padding-left: 14px; }
 
 QStatusBar {
     background: #0f120f; color: #5f6f63; font-size: 11px;
