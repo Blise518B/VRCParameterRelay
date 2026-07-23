@@ -93,6 +93,10 @@ class MainWindow(QMainWindow):
 
     # -- window geometry ---------------------------------------------------------
 
+    #: fresh-install window size (no saved geometry yet) — a comfortable
+    #: two-column fit
+    DEFAULT_SIZE = (1280, 750)
+
     def _restore_window_size(self) -> None:
         saved = self.core.store.settings.get("window_size")
         try:
@@ -101,7 +105,7 @@ class MainWindow(QMainWindow):
                 raise ValueError
             self.resize(w, h)
         except (TypeError, ValueError, IndexError):
-            self.resize(1080, 640)
+            self.resize(*self.DEFAULT_SIZE)
         if self.core.store.settings.get("window_maximized"):
             self.setWindowState(Qt.WindowMaximized)
 

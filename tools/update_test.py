@@ -68,6 +68,7 @@ win2 = MainWindow(core, tunnel, web)
 check("window size restored on start", (win2.width(), win2.height()) == (1234, 765))
 store.set("window_size", [10, 10])  # absurd -> fall back to the default
 win3 = MainWindow(core, tunnel, web)
-check("bad saved size falls back to default", (win3.width(), win3.height()) == (1080, 640))
+check("bad saved size falls back to default",
+      (win3.width(), win3.height()) == MainWindow.DEFAULT_SIZE)
 
 print("ALL UPDATE TESTS PASSED")
