@@ -53,16 +53,19 @@ QLabel#LiveBadge[state="offline"] {
 }
 
 QPushButton#PauseBtn {
-    font-family: 'Segoe MDL2 Assets', 'Segoe Fluent Icons';
-    font-size: 14px; padding: 7px 0;
-    color: #ff6b81; border-color: #a52a38;
+    font-size: 13px; font-weight: 700; padding: 6px 18px; letter-spacing: 1px;
+    color: #ff6b81; border-color: #a52a38; background: transparent;
 }
 QPushButton#PauseBtn:hover { background: #2a1216; }
+QPushButton#PauseBtn[state="active"] {
+    color: #ffdfe4; border-color: #d43048; background: #7a1226;
+}
+QPushButton#PauseBtn[state="active"]:hover { background: #8f1730; }
 QPushButton#PauseBtn[state="paused"] {
     color: #facc15; border-color: #8a6d1a; background: #2a2410;
 }
 QPushButton#PauseBtn[state="paused"]:hover { background: #3a3216; }
-QPushButton#PauseBtn:disabled { color: #4a3f42; border-color: #2d2226; }
+QPushButton#PauseBtn:disabled { color: #4a3f42; border-color: #2d2226; background: transparent; }
 
 QPushButton#ChipBtn {
     background: #131a15; border: 1px solid %(edge)s; border-radius: 10px;

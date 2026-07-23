@@ -186,8 +186,8 @@ class MainWindow(QMainWindow):
         self.cat_btn = QPushButton("＋ Category")
         self.cat_btn.setToolTip("Add another category box to the board")
         self.cat_btn.clicked.connect(lambda: self.core.add_category())
-        self.pause_btn = QPushButton("", objectName="PauseBtn")  # MDL2 stop
-        self.pause_btn.setFixedWidth(36)
+        self.pause_btn = QPushButton("■ STOP", objectName="PauseBtn")  # in board toolbar
+        self.pause_btn.setCursor(Qt.PointingHandCursor)
         self.pause_btn.clicked.connect(self._toggle_pause)
         share_btn = QPushButton("Share", objectName="Primary")
         share_btn.clicked.connect(self._open_share)
@@ -195,12 +195,11 @@ class MainWindow(QMainWindow):
         help_btn.setFixedWidth(34)
         help_btn.setToolTip("Help")
         help_btn.clicked.connect(lambda: HelpDialog(self).exec())
-        lay.addWidget(self.pause_btn)
         lay.addWidget(share_btn)
         lay.addWidget(help_btn)
 
         # chips are QLabels that would otherwise stretch to the header's height
-        for widget in (self.vrc_chip, self.guest_chip, self.pause_btn, share_btn,
+        for widget in (self.vrc_chip, self.guest_chip, share_btn,
                        help_btn, self.preset_combo, preset_menu_btn):
             widget.setFixedHeight(34)
 
@@ -229,9 +228,10 @@ class MainWindow(QMainWindow):
         bar.setSpacing(8)
         bar.addWidget(self.cat_btn)
         bar.addWidget(self.yolo_btn)
+        bar.addWidget(self.pause_btn)
         bar.addStretch(1)
-        for widget in (self.cat_btn, self.yolo_btn):
-            widget.setFixedHeight(30)
+        for widget in (self.cat_btn, self.yolo_btn, self.pause_btn):
+            widget.setFixedHeight(32)
         left.addWidget(self.board_toolbar)
 
         self.board_scroll = QScrollArea(widgetResizable=True)
@@ -701,17 +701,17 @@ class MainWindow(QMainWindow):
     def _refresh_pause_btn(self) -> None:
         tunnel_up = self.tunnel.state in ("downloading", "starting", "online")
         if self.core.sharing_enabled:
-            self.pause_btn.setText("")  # MDL2 stop square
-            self.pause_btn.setProperty("state", "")
+            self.pause_btn.setText("■ STOP")  # filled red — the emergency stop
+            self.pause_btn.setProperty("state", "active")
             self.pause_btn.setToolTip(
                 "Emergency stop — pause sharing.\n"
                 "Guests stay connected but all their input is blocked.")
         elif tunnel_up:
-            self.pause_btn.setText("")  # MDL2 play
+            self.pause_btn.setText("▶ RESUME")
             self.pause_btn.setProperty("state", "paused")
             self.pause_btn.setToolTip("Sharing is paused — click to resume")
         else:
-            self.pause_btn.setText("")
+            self.pause_btn.setText("■ STOP")
             self.pause_btn.setProperty("state", "")
             self.pause_btn.setToolTip("Sharing is off")
         self.pause_btn.setEnabled(self.core.sharing_enabled or tunnel_up)
@@ -770,9 +770,9 @@ editing, and nothing is sent to VRChat.</p>
 a Cloudflare quick tunnel; downloads itself on first use). Guests see only
 your board and can set a display name so you know who's connected — click
 the <b>guests</b> chip to see the list (unnamed guests show as
-<i>Anonymous&nbsp;#N</i>). The red <b>stop button</b> in the header is an
-emergency stop: it pauses everyone instantly without disconnecting them;
-click again to resume. <b>Reset link</b> invalidates every link you've
+<i>Anonymous&nbsp;#N</i>). The red <b>STOP</b> button above the board is an
+emergency stop: it pauses everyone instantly without disconnecting them,
+then turns into <b>RESUME</b>. <b>Reset link</b> invalidates every link you've
 handed out. For a link that survives app restarts, set up a free ngrok
 static domain in <i>Link settings</i>.</p>
 
