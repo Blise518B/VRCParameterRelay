@@ -78,7 +78,7 @@ def main() -> int:
     from vrc_parameter_relay.store import Store
     from vrc_parameter_relay.tunnel import Tunnel
     from vrc_parameter_relay.ui.main_window import MainWindow
-    from vrc_parameter_relay.ui.theme import build_qss
+    from vrc_parameter_relay.ui.theme import build_qss, load_bundled_fonts
     from vrc_parameter_relay.webserver import GuestServer
 
     store = Store()
@@ -96,6 +96,7 @@ def main() -> int:
 
     app = QApplication(sys.argv[:1])
     app.setStyle("Fusion")
+    load_bundled_fonts()
     qss = build_qss(args.theme)
     if args.font:  # later equal-specificity rules win in Qt stylesheets
         qss += "\n* { font-family: '%s'; }\n" % args.font

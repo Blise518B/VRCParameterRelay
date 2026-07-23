@@ -30,6 +30,7 @@ FONT_CHOICES = [
     ("Dubai", "clean, even, modern"),
     ("Trebuchet MS", "rounded, friendly"),
     ("Bahnschrift", "condensed, technical"),
+    ("Orbitron", "geometric sci-fi (bundled)"),
     ("Cascadia Code", "coding mono"),
     ("Consolas", "classic mono"),
 ]
@@ -563,6 +564,24 @@ def build_qss(theme: str = DEFAULT_THEME, font: str = "") -> str:
 def accent_of(theme: str = DEFAULT_THEME) -> str:
     """Accent colour for a theme, for inline rich-text the UI draws itself."""
     return ACCENTS.get(theme, ACCENTS[DEFAULT_THEME])
+
+
+def load_bundled_fonts() -> None:
+    """Register the app's bundled .ttf fonts with Qt.
+
+    Fonts shipped in assets/fonts (e.g. Orbitron) don't depend on the user
+    having them installed. Call once, after the QApplication exists.
+    """
+    from PySide6.QtGui import QFontDatabase
+
+    from .. import resource_path
+    font_dir = resource_path("assets/fonts")
+    try:
+        files = sorted(font_dir.glob("*.ttf")) + sorted(font_dir.glob("*.otf"))
+    except OSError:
+        return
+    for path in files:
+        QFontDatabase.addApplicationFont(str(path))
 
 
 # Backwards-compat: some tools import QSS directly (defaults to the broker look).

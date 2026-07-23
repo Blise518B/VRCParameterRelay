@@ -34,7 +34,7 @@ def main() -> int:
     from .store import Store
     from .tunnel import Tunnel
     from .ui.main_window import MainWindow
-    from .ui.theme import build_qss
+    from .ui.theme import build_qss, load_bundled_fonts
     from .webserver import GuestServer
 
     store = Store()
@@ -47,6 +47,7 @@ def main() -> int:
 
     app = QApplication(sys.argv[:1])
     app.setStyle("Fusion")
+    load_bundled_fonts()  # register Orbitron & co. before styling
     app.setStyleSheet(build_qss(store.settings.get("theme"), store.settings.get("font")))
     app.setApplicationName(APP_NAME)
 
