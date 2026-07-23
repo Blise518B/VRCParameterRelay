@@ -47,7 +47,7 @@ def main() -> int:
 
     app = QApplication(sys.argv[:1])
     app.setStyle("Fusion")
-    app.setStyleSheet(build_qss(store.settings.get("theme")))
+    app.setStyleSheet(build_qss(store.settings.get("theme"), store.settings.get("font")))
     app.setApplicationName(APP_NAME)
 
     from PySide6.QtGui import QIcon

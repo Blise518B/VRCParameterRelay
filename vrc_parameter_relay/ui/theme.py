@@ -18,6 +18,17 @@ THEME_LABELS = {"broker": "Broker (default)", "neon": "Classic neon"}
 THEME_ORDER = ["broker", "neon"]
 DEFAULT_THEME = "broker"
 
+# Selectable UI fonts (all ship with Windows). (family, one-line note)
+DEFAULT_FONT = "Segoe UI"
+FONT_CHOICES = [
+    ("Segoe UI", "clean modern sans — the default"),
+    ("Bahnschrift", "condensed, technical"),
+    ("Cascadia Code", "coding mono"),
+    ("Consolas", "classic mono"),
+    ("Trebuchet MS", "rounded, friendly"),
+    ("Verdana", "wide, high legibility"),
+]
+
 # Vibrant per-category palette (GPU-broker hues): key -> (vibrant, mid, tint)
 #   vibrant = text/accent · mid = border tone · tint = dark fill
 CATEGORY_PALETTE = {
@@ -289,6 +300,18 @@ QProgressBar {
     text-align: center; color: #e6efe8;
 }
 QProgressBar::chunk { background: %(accent)s; border-radius: 5px; }
+
+QGroupBox {
+    border: 1px solid %(edge)s; border-radius: 10px; margin-top: 12px;
+    padding: 14px 12px 8px; font-weight: 700; color: %(accent)s;
+}
+QGroupBox::title {
+    subcontrol-origin: margin; subcontrol-position: top left;
+    left: 12px; padding: 0 6px;
+}
+QLabel#SettingsHint { color: #94a698; font-size: 11px; font-weight: 400; }
+QRadioButton { padding: 4px 2px; color: #e6efe8; }
+QRadioButton::indicator { width: 14px; height: 14px; }
 """ % {"accent": _NEON_ACCENT, "edge": _NEON_EDGE} + _neon_cat_variants()
 
 
@@ -501,15 +524,35 @@ QProgressBar {
     text-align: center; color: #c9d4cc;
 }
 QProgressBar::chunk { background: #4af58c; border-radius: 5px; }
+
+QGroupBox {
+    border: 1px solid #2f5e3f; border-radius: 10px; margin-top: 12px;
+    padding: 14px 12px 8px; font-weight: 700; color: #4af58c;
+}
+QGroupBox::title {
+    subcontrol-origin: margin; subcontrol-position: top left;
+    left: 12px; padding: 0 6px;
+}
+QLabel#SettingsHint { color: #7c8a80; font-size: 11px; font-weight: 400; }
+QRadioButton { padding: 4px 2px; color: #c9d4cc; }
+QRadioButton::indicator { width: 14px; height: 14px; }
 """ + _broker_cat_variants()
 
 
 THEMES = {"broker": BROKER_QSS, "neon": NEON_QSS}
 
 
-def build_qss(theme: str = DEFAULT_THEME) -> str:
-    """Full stylesheet for a theme name (falls back to the default)."""
-    return THEMES.get(theme, THEMES[DEFAULT_THEME])
+def build_qss(theme: str = DEFAULT_THEME, font: str = "") -> str:
+    """Full stylesheet for a theme, optionally overriding the UI font family.
+
+    The font rule is appended last: in Qt style sheets a later rule of equal
+    specificity wins per-property, so it overrides only font-family and leaves
+    the theme's font sizes intact.
+    """
+    qss = THEMES.get(theme, THEMES[DEFAULT_THEME])
+    if font:
+        qss += "\n* { font-family: '%s', 'Segoe UI', sans-serif; }\n" % font
+    return qss
 
 
 def accent_of(theme: str = DEFAULT_THEME) -> str:

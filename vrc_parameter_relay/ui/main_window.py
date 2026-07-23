@@ -8,17 +8,21 @@ import urllib.request
 from typing import Any, Optional
 
 from PySide6.QtCore import QObject, QSize, Qt, QUrl, Signal
-from PySide6.QtGui import QActionGroup, QDesktopServices
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDockWidget,
-    QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow,
-    QMenu, QMessageBox, QPushButton, QScrollArea, QTextBrowser, QToolButton,
-    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QDockWidget, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
+    QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QRadioButton,
+    QScrollArea, QTextBrowser, QToolButton, QTreeWidget, QTreeWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__
 from .dialogs import ControlDialog, ShareDialog
-from .theme import DEFAULT_THEME, THEME_LABELS, THEME_ORDER, accent_of, build_qss
+from .theme import (
+    DEFAULT_FONT, DEFAULT_THEME, FONT_CHOICES, THEME_LABELS, THEME_ORDER,
+    accent_of, build_qss,
+)
 from .widgets import CategoryBox, ControlCard, ParamTree, drag_ghost
 
 RELEASES_URL = f"{GITHUB_URL}/VRCParameterRelay/releases"
@@ -202,9 +206,9 @@ class MainWindow(QMainWindow):
         help_btn.clicked.connect(lambda: HelpDialog(self).exec())
         self.gear_btn = QToolButton(objectName="GearBtn")
         self.gear_btn.setText("⚙")
-        self.gear_btn.setToolTip("Settings — switch the design")
+        self.gear_btn.setToolTip("Settings — design && font")
         self.gear_btn.setCursor(Qt.PointingHandCursor)
-        self.gear_btn.clicked.connect(self._show_settings_menu)
+        self.gear_btn.clicked.connect(self._open_settings)
         lay.addWidget(share_btn)
         lay.addWidget(help_btn)
         lay.addWidget(self.gear_btn)
@@ -739,31 +743,35 @@ class MainWindow(QMainWindow):
         self.pause_btn.style().unpolish(self.pause_btn)
         self.pause_btn.style().polish(self.pause_btn)
 
-    # -- settings / theme -----------------------------------------------------------
+    # -- settings / theme + font ----------------------------------------------------
 
-    def _show_settings_menu(self) -> None:
-        menu = QMenu(self)
-        title = menu.addAction("Design")
-        title.setEnabled(False)
-        group = QActionGroup(self)
-        group.setExclusive(True)
-        current = self.core.store.settings.get("theme", DEFAULT_THEME)
-        for key in THEME_ORDER:
-            action = menu.addAction(THEME_LABELS.get(key, key))
-            action.setCheckable(True)
-            action.setChecked(key == current)
-            group.addAction(action)
-            action.triggered.connect(lambda _=False, k=key: self._set_theme(k))
-        menu.exec(self.gear_btn.mapToGlobal(self.gear_btn.rect().bottomLeft()))
+    def _open_settings(self) -> None:
+        # non-modal so the board keeps live-previewing behind it
+        if getattr(self, "settings_dialog", None) is None:
+            self.settings_dialog = SettingsDialog(self)
+        self.settings_dialog.show()
+        self.settings_dialog.raise_()
+        self.settings_dialog.activateWindow()
+
+    def _apply_style(self) -> None:
+        theme = self.core.store.settings.get("theme", DEFAULT_THEME)
+        font = self.core.store.settings.get("font") or DEFAULT_FONT
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(build_qss(theme, font))  # re-polishes every widget live
+        self._refresh_avatar_header()  # the live dot uses the theme accent inline
 
     def _set_theme(self, key: str) -> None:
         if key == self.core.store.settings.get("theme"):
             return
         self.core.store.set("theme", key)
-        app = QApplication.instance()
-        if app is not None:
-            app.setStyleSheet(build_qss(key))  # re-polishes every widget live
-        self._refresh_avatar_header()  # the live dot uses the theme accent inline
+        self._apply_style()
+
+    def _set_font(self, family: str) -> None:
+        if family == self.core.store.settings.get("font"):
+            return
+        self.core.store.set("font", family)
+        self._apply_style()
 
     def _open_share(self) -> None:
         self.share_dialog.show()
@@ -830,9 +838,10 @@ list and control over everything, ignoring category locks (values stay
 clamped to safe ranges). It stays on until you turn it off.</p>
 
 <h2>Appearance</h2>
-<p>The ⚙ gear in the top-right switches the design between <b>Broker</b>
-(the default muted look) and <b>Classic neon</b> (the original brighter
-style). Your choice is remembered.</p>
+<p>The ⚙ gear in the top-right opens <b>Settings</b>, with two sections:
+<b>Design</b> — the colour scheme (<i>Broker</i>, the default, or
+<i>Classic neon</i>) — and <b>Font</b>, a live typeface picker (each row is
+shown in its own font). Changes apply instantly and are remembered.</p>
 
 <h2>Data &amp; updates</h2>
 <p>Boards and settings live in <code>%APPDATA%\\VRCParameterRelay</code>.
@@ -851,6 +860,65 @@ class HelpDialog(QDialog):
         browser.setOpenExternalLinks(True)
         browser.setHtml(HELP_HTML)
         lay.addWidget(browser)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        lay.addWidget(close, alignment=Qt.AlignRight)
+
+
+class SettingsDialog(QDialog):
+    """Appearance settings — Design (theme) and Font, both applied live."""
+
+    def __init__(self, main: "MainWindow") -> None:
+        super().__init__(main)
+        self.main = main
+        self.setWindowTitle(f"{APP_NAME} — Settings")
+        self.setMinimumWidth(440)
+        settings = main.core.store.settings
+
+        lay = QVBoxLayout(self)
+        lay.setSpacing(16)
+        lay.setContentsMargins(16, 16, 16, 16)
+
+        # -- Design (theme) --------------------------------------------------
+        design = QGroupBox("Design")
+        dl = QVBoxLayout(design)
+        dl.setSpacing(6)
+        dl.setContentsMargins(12, 8, 12, 10)
+        hint_d = QLabel("The overall colour scheme and shapes.", objectName="SettingsHint")
+        dl.addWidget(hint_d)
+        self._theme_group = QButtonGroup(self)
+        current_theme = settings.get("theme", DEFAULT_THEME)
+        for key in THEME_ORDER:
+            radio = QRadioButton(THEME_LABELS.get(key, key))
+            radio.setChecked(key == current_theme)
+            radio.toggled.connect(lambda on, k=key: on and self.main._set_theme(k))
+            self._theme_group.addButton(radio)
+            dl.addWidget(radio)
+        lay.addWidget(design)
+
+        # -- Font ------------------------------------------------------------
+        font_box = QGroupBox("Font")
+        fl = QVBoxLayout(font_box)
+        fl.setSpacing(6)
+        fl.setContentsMargins(12, 8, 12, 10)
+        hint_f = QLabel("Typeface for the whole app — each row is shown in its own font.",
+                        objectName="SettingsHint")
+        hint_f.setWordWrap(True)
+        fl.addWidget(hint_f)
+        self._font_group = QButtonGroup(self)
+        current_font = settings.get("font") or DEFAULT_FONT
+        for family, note in FONT_CHOICES:
+            radio = QRadioButton(f"{family}  —  {note}")
+            radio.setChecked(family == current_font)
+            # each row previews its own font; a widget stylesheet outranks the
+            # app-wide one, so the preview survives when the app font changes
+            radio.setStyleSheet("QRadioButton { font-family: '%s'; font-size: 13px; }"
+                                % family)
+            radio.toggled.connect(lambda on, f=family: on and self.main._set_font(f))
+            self._font_group.addButton(radio)
+            fl.addWidget(radio)
+        lay.addWidget(font_box)
+
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
         lay.addWidget(close, alignment=Qt.AlignRight)
