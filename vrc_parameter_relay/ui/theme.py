@@ -18,30 +18,40 @@ THEME_LABELS = {"broker": "Broker (default)", "neon": "Classic neon"}
 THEME_ORDER = ["broker", "neon"]
 DEFAULT_THEME = "broker"
 
-# Selectable UI fonts. Missing families fall back to Segoe UI, so it's safe
-# to offer Office/Win11 fonts — a friend without them just sees the fallback.
-# (family, one-line note)
+# Selectable UI fonts, grouped by general type for the picker. Missing system
+# families fall back to Segoe UI, so it's safe to offer Office/Win11 fonts;
+# the "bundled" group ships inside the exe and is always present.
+# (group title, [(family, one-line note), ...])
 DEFAULT_FONT = "Segoe UI"
-FONT_CHOICES = [
-    ("Segoe UI", "clean modern sans — the default"),
-    ("Segoe UI Variable", "refined, softer — Mac-like (Win 11)"),
-    ("Corbel", "soft, gently rounded"),
-    ("Century Gothic", "very round, geometric"),
-    ("Dubai", "clean, even, modern"),
-    ("Trebuchet MS", "rounded, friendly"),
-    ("Bahnschrift", "condensed, technical"),
-    ("Cascadia Code", "coding mono"),
-    ("Consolas", "classic mono"),
-    # bundled sci-fi / techno faces (ship inside the exe)
-    ("Orbitron", "geometric sci-fi (bundled)"),
-    ("Michroma", "wide, clean sci-fi (bundled)"),
-    ("Rajdhani", "condensed HUD techno (bundled)"),
-    ("Chakra Petch", "squarish sci-fi (bundled)"),
-    ("Exo 2", "modern techy, versatile (bundled)"),
-    ("Aldrich", "square techno (bundled)"),
-    ("Audiowide", "retro-futuristic (bundled)"),
-    ("Electrolize", "clean techno (bundled)"),
+FONT_GROUPS = [
+    ("Clean & modern", [
+        ("Segoe UI", "clean modern sans — the default"),
+        ("Segoe UI Variable", "refined, softer — Mac-like (Win 11)"),
+        ("Dubai", "clean, even, modern"),
+    ]),
+    ("Rounded & friendly", [
+        ("Corbel", "soft, gently rounded"),
+        ("Century Gothic", "very round, geometric"),
+        ("Trebuchet MS", "rounded, friendly"),
+    ]),
+    ("Sci-fi & techno (bundled)", [
+        ("Orbitron", "wide geometric, slashed zeros"),
+        ("Michroma", "wide, clean, even"),
+        ("Rajdhani", "condensed HUD — readable"),
+        ("Chakra Petch", "squarish, techy"),
+        ("Exo 2", "modern, versatile"),
+        ("Aldrich", "square techno"),
+        ("Audiowide", "retro-futuristic, rounded"),
+        ("Electrolize", "clean straight techno"),
+    ]),
+    ("Condensed & mono", [
+        ("Bahnschrift", "condensed, technical"),
+        ("Cascadia Code", "coding mono"),
+        ("Consolas", "classic mono"),
+    ]),
 ]
+# flat list of (family, note), for anything that just needs every choice
+FONT_CHOICES = [item for _, items in FONT_GROUPS for item in items]
 
 # Vibrant per-category palette (GPU-broker hues): key -> (vibrant, mid, tint)
 #   vibrant = text/accent · mid = border tone · tint = dark fill
@@ -324,6 +334,10 @@ QGroupBox::title {
     left: 12px; padding: 0 6px;
 }
 QLabel#SettingsHint { color: #94a698; font-size: 11px; font-weight: 400; }
+QLabel#FontGroupHead {
+    color: %(accent)s; font-size: 10px; font-weight: 700;
+    padding: 8px 0 1px; border-bottom: 1px solid %(edge)s; margin-bottom: 3px;
+}
 QRadioButton { padding: 4px 2px; color: #e6efe8; }
 QRadioButton::indicator { width: 14px; height: 14px; }
 """ % {"accent": _NEON_ACCENT, "edge": _NEON_EDGE} + _neon_cat_variants()
@@ -548,6 +562,10 @@ QGroupBox::title {
     left: 12px; padding: 0 6px;
 }
 QLabel#SettingsHint { color: #7c8a80; font-size: 11px; font-weight: 400; }
+QLabel#FontGroupHead {
+    color: #4af58c; font-size: 10px; font-weight: 700;
+    padding: 8px 0 1px; border-bottom: 1px solid #243029; margin-bottom: 3px;
+}
 QRadioButton { padding: 4px 2px; color: #c9d4cc; }
 QRadioButton::indicator { width: 14px; height: 14px; }
 """ + _broker_cat_variants()

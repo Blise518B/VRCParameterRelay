@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__
 from .dialogs import ControlDialog, ShareDialog
 from .theme import (
-    DEFAULT_FONT, DEFAULT_THEME, FONT_CHOICES, THEME_LABELS, THEME_ORDER,
+    DEFAULT_FONT, DEFAULT_THEME, FONT_GROUPS, THEME_LABELS, THEME_ORDER,
     accent_of, build_qss,
 )
 from .widgets import CategoryBox, ControlCard, ParamTree, drag_ghost
@@ -911,25 +911,32 @@ class SettingsDialog(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setMaximumHeight(300)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("background: transparent;")
+        scroll.viewport().setStyleSheet("background: transparent;")
         holder = QWidget()
+        holder.setStyleSheet("background: transparent;")
         hl = QVBoxLayout(holder)
         hl.setContentsMargins(0, 0, 0, 0)
         hl.setSpacing(6)
         self._font_group = QButtonGroup(self)
         current_font = settings.get("font") or DEFAULT_FONT
         checked_radio = None
-        for family, note in FONT_CHOICES:
-            radio = QRadioButton(f"{family}  —  {note}")
-            radio.setChecked(family == current_font)
-            if family == current_font:
-                checked_radio = radio
-            # each row previews its own font; a widget stylesheet outranks the
-            # app-wide one, so the preview survives when the app font changes
-            radio.setStyleSheet("QRadioButton { font-family: '%s'; font-size: 13px; }"
-                                % family)
-            radio.toggled.connect(lambda on, f=family: on and self.main._set_font(f))
-            self._font_group.addButton(radio)
-            hl.addWidget(radio)
+        for group_title, items in FONT_GROUPS:
+            head = QLabel(group_title.upper(), objectName="FontGroupHead")
+            hl.addWidget(head)
+            for family, note in items:
+                radio = QRadioButton(f"{family}  —  {note}")
+                radio.setChecked(family == current_font)
+                if family == current_font:
+                    checked_radio = radio
+                # each row previews its own font; a widget stylesheet outranks
+                # the app-wide one, so the preview survives a font change
+                radio.setStyleSheet(
+                    "QRadioButton { font-family: '%s'; font-size: 13px; }" % family)
+                radio.toggled.connect(lambda on, f=family: on and self.main._set_font(f))
+                self._font_group.addButton(radio)
+                hl.addWidget(radio)
         hl.addStretch(1)
         scroll.setWidget(holder)
         fl.addWidget(scroll)
