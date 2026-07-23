@@ -1,10 +1,15 @@
 """App themes.
 
 Two green-on-black looks, switchable at runtime from the header gear:
-  * "broker"  (default) — a muted terminal/dashboard style adapted from the
-                GPU-broker Home Assistant dashboard: near-black blue-tinted
-                background, thin subtle green borders, minty accent, small radii.
-  * "neon"    — the original brighter neon-green style.
+  * "broker"  (default) — the original shapes and font, recoloured with the
+                GPU-broker dashboard palette: near-black blue-tinted
+                background, muted hairline borders, and vibrant accents
+                (green #4af58c, red #ff5561, amber #ffb454, blue #7aa7ff,
+                cyan #56d9f2, purple #d78cff).
+  * "neon"    — the original brighter neon-green style, unchanged.
+
+Categories can each carry one of the vibrant colours (the "catcolor"
+property on the frame); the variants for both themes are generated below.
 """
 
 # Accent per theme, for the few inline rich-text bits the UI draws itself.
@@ -12,6 +17,57 @@ ACCENTS = {"broker": "#4af58c", "neon": "#31f272"}
 THEME_LABELS = {"broker": "Broker (default)", "neon": "Classic neon"}
 THEME_ORDER = ["broker", "neon"]
 DEFAULT_THEME = "broker"
+
+# Vibrant per-category palette (GPU-broker hues): key -> (vibrant, mid, tint)
+#   vibrant = text/accent · mid = border tone · tint = dark fill
+CATEGORY_PALETTE = {
+    "green":  ("#4af58c", "#2f5e3f", "#10291a"),
+    "blue":   ("#7aa7ff", "#3a5384", "#131c30"),
+    "cyan":   ("#56d9f2", "#2f6b7a", "#0e2229"),
+    "yellow": ("#ffb454", "#6b5320", "#291f0c"),
+    "red":    ("#ff5561", "#5c2228", "#2a1014"),
+    "purple": ("#d78cff", "#5e3f78", "#221430"),
+}
+CATEGORY_COLOR_LABELS = {
+    "green": "Green", "blue": "Blue", "cyan": "Cyan",
+    "yellow": "Yellow", "red": "Red", "purple": "Purple",
+}
+
+
+def _broker_cat_variants() -> str:
+    """Broker: dark-tinted header bar, vibrant title, hue-toned frame border."""
+    out = []
+    for key, (vib, mid, tint) in CATEGORY_PALETTE.items():
+        out.append(f"""
+QFrame#Category[catcolor="{key}"] {{ border: 1px solid {mid}; }}
+QFrame#Category[catcolor="{key}"] QWidget#CatHeader {{ background: {tint}; }}
+QFrame#Category[catcolor="{key}"] QLineEdit#CatName {{ color: {vib}; }}
+QFrame#Category[catcolor="{key}"] QLineEdit#CatName:focus {{ background: {mid}; }}
+QFrame#Category[catcolor="{key}"] QLabel#CatGrip {{ color: {vib}; }}
+""")
+    return "".join(out)
+
+
+# Neon: bright filled header bars per hue (green == the classic look).
+_NEON_CAT_BARS = {
+    "green":  ("#1c8a3d", "#17703a", "#36a35c"),
+    "blue":   ("#1e5fa0", "#194f85", "#3b6ea3"),
+    "cyan":   ("#15808f", "#116a77", "#2e93a3"),
+    "yellow": ("#a06a14", "#855812", "#b3813a"),
+    "red":    ("#9c2531", "#821f29", "#b04552"),
+    "purple": ("#7a3fa8", "#653389", "#9159ba"),
+}
+
+
+def _neon_cat_variants() -> str:
+    out = []
+    for key, (bar, focus, border) in _NEON_CAT_BARS.items():
+        out.append(f"""
+QFrame#Category[catcolor="{key}"] {{ border: 1px solid {border}; }}
+QFrame#Category[catcolor="{key}"] QWidget#CatHeader {{ background: {bar}; }}
+QFrame#Category[catcolor="{key}"] QLineEdit#CatName:focus {{ background: {focus}; }}
+""")
+    return "".join(out)
 
 
 # --------------------------------------------------------------------------
@@ -220,90 +276,88 @@ QProgressBar {
     text-align: center; color: #e6efe8;
 }
 QProgressBar::chunk { background: %(accent)s; border-radius: 5px; }
-""" % {"accent": _NEON_ACCENT, "edge": _NEON_EDGE}
+""" % {"accent": _NEON_ACCENT, "edge": _NEON_EDGE} + _neon_cat_variants()
 
 
 # --------------------------------------------------------------------------
-# Broker (default) — monospace terminal-dashboard look, modelled closely on
-# the GPU-broker Home Assistant dashboard:
-#   bg #07090c · panel #0a0d0b · hairline border #1c2620 / #243029
-#   accent #4af58c · amber #ffb454 · red #ff5561 · cyan #56d9f2
-#   text #c9d4cc · dim #5f6f64 · faint #39423b
-# Defining traits: monospace font, near-sharp 2px corners, hairline borders,
-# card titles as plain green text (no filled bars), compact tag chips.
+# Broker (default) — the neon shapes/font with the GPU-broker palette:
+#   bg #07090c · panel #0b0f0c · hairline border #243029 · accent #4af58c
+#   red #ff5561 · amber #ffb454 · blue #7aa7ff · cyan #56d9f2 · purple #d78cff
+#   text #c9d4cc · dim #5f6f64
 # --------------------------------------------------------------------------
 BROKER_QSS = """
-* { font-family: 'Consolas', 'Cascadia Mono', 'Courier New', monospace; font-size: 12px; }
+* { font-family: 'Segoe UI', sans-serif; font-size: 13px; }
 
 QMainWindow, QDialog { background: #07090c; }
 QWidget { color: #c9d4cc; }
 
-#Header { background: #07090c; border-bottom: 1px solid #243029; }
+#Header { background: #090d0a; border-bottom: 1px solid #243029; }
 #BoardName {
-    background: transparent; border: none; font-size: 18px; font-weight: 700;
+    background: transparent; border: none; font-size: 19px; font-weight: 600;
     padding: 2px 4px; color: #4af58c;
 }
-#BoardName:focus { background: #0e1712; border-radius: 2px; }
+#BoardName:focus { background: #0e1712; border-radius: 6px; }
 #AvatarId { color: #5f6f64; font-size: 11px; }
 
 QLabel#Chip {
-    background: transparent; border: 1px solid #243029; border-radius: 2px;
-    padding: 0 10px; color: #7c8a80; font-size: 11px; font-weight: 700;
+    background: #0b0f0c; border: 1px solid #243029; border-radius: 10px;
+    padding: 0 12px; color: #7c8a80; font-size: 12px;
 }
 QLabel#Chip[state="ok"] { color: #4af58c; border-color: #2f5e3f; }
 QLabel#Chip[state="bad"] { color: #ff5561; border-color: #5c2228; }
 
 QPushButton {
-    background: transparent; border: 1px solid #243029; border-radius: 2px;
-    padding: 6px 13px; color: #b7c9bd; font-weight: 700;
+    background: transparent; border: 1px solid #243029; border-radius: 8px;
+    padding: 7px 14px; color: #c9d4cc;
 }
-QPushButton:hover { background: #0d1410; border-color: #4af58c; color: #4af58c; }
+QPushButton:hover { background: #0d1712; border-color: #4af58c; color: #4af58c; }
 QPushButton:pressed { background: #0b110d; }
 QPushButton#Primary {
-    background: transparent; border-color: #4af58c; color: #4af58c; font-weight: 700;
+    background: #4af58c; border-color: #4af58c;
+    font-weight: 650; color: #04120a;
 }
-QPushButton#Primary:hover { background: #0e2116; color: #7dffb0; border-color: #7dffb0; }
+QPushButton#Primary:hover { background: #7dffb0; border-color: #7dffb0; color: #04120a; }
 QPushButton#Danger { color: #ff5561; border-color: #5c2228; }
 QPushButton#Danger:hover { background: #170a0c; border-color: #ff5561; color: #ff5561; }
 
 QPushButton#SyncBtn {
-    font-size: 12px; font-weight: 700; padding: 5px 12px;
-    color: #7c8a80; border-color: #243029;
+    font-size: 13px; font-weight: 600; padding: 5px 14px;
+    color: #9fb3a6; border-color: #243029;
 }
-QPushButton#SyncBtn:hover { background: #0d1410; color: #4af58c; border-color: #4af58c; }
+QPushButton#SyncBtn:hover { background: #0d1712; color: #4af58c; border-color: #4af58c; }
 
 QLabel#LiveBadge {
-    border-radius: 2px; padding: 1px 8px; font-size: 11px; font-weight: 700;
+    border-radius: 9px; padding: 1px 9px; font-size: 11px; font-weight: 700;
 }
 QLabel#LiveBadge[state="live"] {
-    background: transparent; color: #4af58c; border: 1px solid #2f5e3f;
+    background: #10291a; color: #4af58c; border: 1px solid #2f5e3f;
 }
 QLabel#LiveBadge[state="offline"] {
-    background: transparent; color: #ff5561; border: 1px solid #5c2228;
+    background: #2a1014; color: #ff5561; border: 1px solid #5c2228;
 }
 
 QPushButton#PauseBtn {
-    font-size: 12px; font-weight: 700; padding: 5px 16px;
+    font-size: 13px; font-weight: 700; padding: 6px 18px; letter-spacing: 1px;
     color: #ff5561; border-color: #5c2228; background: transparent;
 }
 QPushButton#PauseBtn:hover { background: #170a0c; }
 QPushButton#PauseBtn[state="active"] {
-    color: #ff5561; border-color: #ff5561; background: #1a0a0d;
+    color: #ffe1e5; border-color: #ff5561; background: #6e141f;
 }
-QPushButton#PauseBtn[state="active"]:hover { background: #26090d; }
+QPushButton#PauseBtn[state="active"]:hover { background: #86202c; }
 QPushButton#PauseBtn[state="paused"] {
-    color: #ffb454; border-color: #6b5320; background: transparent;
+    color: #ffb454; border-color: #6b5320; background: #241a0a;
 }
-QPushButton#PauseBtn[state="paused"]:hover { background: #201808; }
+QPushButton#PauseBtn[state="paused"]:hover { background: #322611; }
 QPushButton#PauseBtn:disabled { color: #3f4a42; border-color: #1c2620; background: transparent; }
 
 QPushButton#ChipBtn {
-    background: transparent; border: 1px solid #243029; border-radius: 2px;
-    padding: 0 10px; color: #7c8a80; font-size: 11px; font-weight: 700;
+    background: #0b0f0c; border: 1px solid #243029; border-radius: 10px;
+    padding: 0 12px; color: #7c8a80; font-size: 12px;
 }
-QPushButton#ChipBtn:hover { background: #0d1410; color: #4af58c; border-color: #4af58c; }
+QPushButton#ChipBtn:hover { background: #0d1712; color: #4af58c; border-color: #4af58c; }
 
-QPushButton#HelpBtn { font-weight: 700; padding: 6px 0; }
+QPushButton#HelpBtn { font-weight: 700; padding: 7px 0; }
 
 QToolButton#AvatarMenu {
     border: none; color: #4af58c; font-size: 13px; font-weight: 700;
@@ -314,127 +368,127 @@ QToolButton#AvatarMenu:hover { color: #7dffb0; }
 QToolButton#GearBtn { border: none; color: #7c8a80; font-size: 16px; padding: 2px 6px; }
 QToolButton#GearBtn:hover { color: #4af58c; }
 
-QComboBox#PresetCombo { padding: 5px 10px; color: #4af58c; font-weight: 700; }
+QComboBox#PresetCombo { padding: 5px 10px; }
 
 QPushButton#YoloToggle {
-    border: 1px solid #4a3a1c; color: #b0895a; font-weight: 700; padding: 6px 12px;
+    border: 1px solid #4a3a1c; color: #b0895a; font-weight: 600; padding: 7px 12px;
 }
-QPushButton#YoloToggle:hover { background: #1a1408; color: #ffb454; border-color: #ffb454; }
+QPushButton#YoloToggle:hover { background: #1a1408; border-color: #ffb454; color: #ffb454; }
 QPushButton#YoloToggle:checked {
-    background: #201808; border-color: #ffb454; color: #ffb454;
+    background: #6b4310; border-color: #ffb454; color: #ffe6c2;
 }
-QPushButton#YoloToggle:checked:hover { background: #2a2010; }
+QPushButton#YoloToggle:checked:hover { background: #7c4f14; }
 
-QMainWindow::separator { width: 4px; background: #243029; }
+QMainWindow::separator {
+    width: 4px;
+    background: #243029;  /* solid line so the pull-tab meets it flush */
+}
 QMainWindow::separator:hover { background: #4af58c; }
 
 QPushButton#DockToggle {
-    border: 1px solid #243029; border-right: none;
-    border-top-left-radius: 2px; border-bottom-left-radius: 2px;
+    border: 1px solid #2f5e3f; border-right: none;
+    border-top-left-radius: 10px; border-bottom-left-radius: 10px;
     border-top-right-radius: 0; border-bottom-right-radius: 0;
-    background: #0b110d; color: #4af58c; font-weight: 800; font-size: 15px;
+    background: #10291a; color: #4af58c; font-weight: 800; font-size: 15px;
     padding: 0;
 }
-QPushButton#DockToggle:hover { background: #14311f; color: #dffbe9; }
+QPushButton#DockToggle:hover { background: #1c5f3a; color: #dffbe9; }
 
-#DockTitle { background: #07090c; border-bottom: 1px solid #243029; }
-QLabel#DockTitleText { font-weight: 700; font-size: 13px; color: #4af58c; }
+#DockTitle { background: #090d0a; border-bottom: 1px solid #243029; }
+QLabel#DockTitleText { font-weight: 600; font-size: 14px; color: #4af58c; }
 
 QScrollArea { border: none; background: transparent; }
 #BoardArea { background: #07090c; }
 
 QFrame#Card {
-    background: #0a0d0b; border: 1px solid #1c2620; border-radius: 2px;
+    background: #0b0f0c; border: 1px solid #243029; border-radius: 12px;
 }
-QLabel#CardLabel { font-weight: 700; font-size: 12px; color: #c9d4cc; }
+QLabel#CardLabel { font-weight: 600; font-size: 13px; }
 QLabel#CardValue { color: #5f6f64; font-size: 11px; }
-QLabel#CardGrip { color: #35624a; font-size: 14px; }
+QLabel#CardGrip { color: #4a8f66; font-size: 14px; }
 QLabel#CardInv { color: #ffb454; font-size: 13px; font-weight: 700; }
 QToolButton#CardMenu { border: none; color: #4af58c; font-size: 16px; padding: 0 4px; }
 QToolButton#CardMenu:hover { color: #7dffb0; }
 
-/* category = a bordered panel; its title is plain green text, no filled bar */
 QFrame#Category {
-    background: #080b09; border: 1px solid #243029; border-radius: 2px;
+    background: #090c0a; border: 1px solid #2f5e3f; border-radius: 14px;
 }
-QWidget#CatHeader { background: transparent; border: none; border-bottom: 1px solid #16201a; }
-QLabel#CatGrip { color: #35624a; font-size: 14px; padding: 0 2px; }
+QWidget#CatHeader { background: #10291a; border-radius: 9px; }
+QLabel#CatGrip { color: #4af58c; font-size: 14px; padding: 0 2px; }
 QLineEdit#CatName {
-    background: transparent; border: none; font-size: 13px; font-weight: 700;
+    background: transparent; border: none; font-size: 14px; font-weight: 600;
     padding: 2px 4px; color: #4af58c;
 }
-QLineEdit#CatName:focus { background: #0e2116; border-radius: 2px; }
+QLineEdit#CatName:focus { background: #2f5e3f; border-radius: 6px; }
 QToolButton#CatLock { border: none; font-size: 14px; padding: 0 6px; }
 QLabel#CatHint {
     color: #5d7a63; font-size: 12px; padding: 16px;
-    border: 1px dashed #243029; border-radius: 2px;
+    border: 1px dashed #243029; border-radius: 9px;
 }
 
 QPushButton#Switch {
-    background: transparent; border: 1px solid #5c2228; border-radius: 2px;
-    min-width: 120px; font-weight: 700; color: #ff5561;
+    background: #a32633; border: none; border-radius: 14px;
+    min-width: 120px; font-weight: 650; color: #ffe1e5;
 }
-QPushButton#Switch:checked {
-    background: #0e2116; border: 1px solid #2f5e3f; color: #4af58c; font-weight: 700;
-}
-QPushButton#Switch:disabled { color: #4a3f42; border-color: #241a1c; }
+QPushButton#Switch:checked { background: #4af58c; color: #04120a; font-weight: 650; }
+QPushButton#Switch:disabled { color: #8a6d72; }
 
 QPushButton#Push {
-    background: transparent; border: 1px solid #4af58c; border-radius: 2px;
-    color: #4af58c; font-weight: 700;
+    background: rgba(74, 245, 140, 0.15); border: 1px solid #4af58c;
+    border-radius: 9px; font-weight: 600; color: #4af58c;
 }
 QPushButton#Push:pressed { background: #4af58c; color: #04120a; }
 
-QSlider::groove:horizontal { height: 3px; background: #1b3326; border-radius: 1px; }
+QSlider::groove:horizontal { height: 5px; background: #1b3326; border-radius: 2px; }
 QSlider::handle:horizontal {
-    width: 12px; height: 12px; margin: -6px 0; border-radius: 2px; background: #4af58c;
+    width: 16px; height: 16px; margin: -6px 0; border-radius: 8px; background: #4af58c;
 }
-QSlider::sub-page:horizontal { background: #35b56a; border-radius: 1px; }
+QSlider::sub-page:horizontal { background: #35b56a; border-radius: 2px; }
 
 QSpinBox, QDoubleSpinBox, QLineEdit, QComboBox {
-    background: #0a0d0b; border: 1px solid #243029; border-radius: 2px; padding: 5px 8px;
+    background: #0a0e0b; border: 1px solid #243029; border-radius: 7px; padding: 5px 8px;
     selection-background-color: #4af58c;
     selection-color: #04120a;
 }
 QComboBox::drop-down { border: none; width: 22px; }
 QComboBox QAbstractItemView {
-    background: #0a0d0b; border: 1px solid #243029; selection-background-color: #14311f;
+    background: #0a0e0b; border: 1px solid #243029; selection-background-color: #14311f;
 }
 
 QDockWidget { color: #7c8a80; }
 
 QTreeWidget {
-    background: #07090c; border: none; alternate-background-color: #0a0d0b;
+    background: #090d0a; border: none; alternate-background-color: #0c110e;
 }
-QTreeWidget::item { height: 24px; padding-left: 6px; }
+QTreeWidget::item { height: 26px; padding-left: 6px; }
 QTreeWidget::item:selected { background: #14311f; }
 QHeaderView::section {
-    background: #07090c; border: none; border-bottom: 1px solid #243029;
-    padding: 6px 8px; color: #5f6f64; font-weight: 700;
+    background: #090d0a; border: none; border-bottom: 1px solid #243029;
+    padding: 6px 8px; color: #6f8074;
 }
 QHeaderView::section:first { padding-left: 14px; }
 
 QStatusBar {
-    background: #07090c; color: #5f6f64; font-size: 11px;
+    background: #090d0a; color: #5f6f64; font-size: 11px;
     border-top: 1px solid #243029;
 }
 QStatusBar::item { border: none; }
-QMenu { background: #0a0d0b; border: 1px solid #243029; padding: 3px; }
-QMenu::item { padding: 5px 20px; border-radius: 2px; }
+QMenu { background: #0b0f0c; border: 1px solid #243029; padding: 4px; }
+QMenu::item { padding: 6px 22px; border-radius: 5px; }
 QMenu::item:selected { background: #14311f; }
 
 QScrollBar:vertical { background: transparent; width: 10px; margin: 0; }
-QScrollBar::handle:vertical { background: #2f4436; border-radius: 2px; min-height: 30px; }
+QScrollBar::handle:vertical { background: #2f4436; border-radius: 5px; min-height: 30px; }
 QScrollBar::handle:vertical:hover { background: #4af58c; }
 QScrollBar::add-line, QScrollBar::sub-line { height: 0; }
 QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 
 QProgressBar {
-    background: #0a0d0b; border: 1px solid #243029; border-radius: 2px;
+    background: #0a0e0b; border: 1px solid #243029; border-radius: 6px;
     text-align: center; color: #c9d4cc;
 }
-QProgressBar::chunk { background: #4af58c; border-radius: 1px; }
-"""
+QProgressBar::chunk { background: #4af58c; border-radius: 5px; }
+""" + _broker_cat_variants()
 
 
 THEMES = {"broker": BROKER_QSS, "neon": NEON_QSS}

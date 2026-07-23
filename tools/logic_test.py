@@ -76,6 +76,15 @@ def main() -> None:
     check("guest works after unlock",
           core.set_control_value(hoodie["id"], True, source="guest"))
 
+    # category colours
+    check("categories default to green",
+          all(c.get("color") == "green" for c in core.board["categories"]))
+    check("set category color", core.set_category_color(nsfw["id"], "red"))
+    check("color stored", nsfw["color"] == "red")
+    check("invalid color rejected",
+          core.set_category_color(nsfw["id"], "hotpink") is False)
+    check("color unchanged after bad set", nsfw["color"] == "red")
+
     # inverted toggles: shown state is flipped, server sends the real value
     inv = core.add_control("TailWag", "toggle", "NoWag", invert=True)
     check("invert stored on control", inv.get("invert") is True)

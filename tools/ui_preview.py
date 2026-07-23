@@ -52,6 +52,9 @@ def seed(core) -> None:
     core.add_control("Brightness", "slider", "Brightness", 0, 1, category=cats[2]["id"])
     core.add_control("OutfitIndex", "int", "Outfit", 0, 5, category=cats[2]["id"])
     core.set_category_locked(cats[1]["id"], True)
+    core.set_category_color(cats[1]["id"], "red")
+    core.set_category_color(cats[2]["id"], "blue")
+    core.set_category_color(cats[3]["id"], "yellow")
     core.rename_avatar("Demo Avatar")
     base = core.board["id"]
     core.add_preset("Alt layout")
@@ -64,6 +67,7 @@ def main() -> int:
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--yolo", action="store_true")
     parser.add_argument("--theme", default="broker")
+    parser.add_argument("--font", help="dev: override the UI font family")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(name)s: %(message)s")
@@ -94,7 +98,10 @@ def main() -> int:
 
     app = QApplication(sys.argv[:1])
     app.setStyle("Fusion")
-    app.setStyleSheet(build_qss(args.theme))
+    qss = build_qss(args.theme)
+    if args.font:  # later equal-specificity rules win in Qt stylesheets
+        qss += "\n* { font-family: '%s'; }\n" % args.font
+    app.setStyleSheet(qss)
     window = MainWindow(core, tunnel, web)
     window.show()
     import time

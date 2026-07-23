@@ -4,12 +4,14 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QDrag, QPainter, QPixmap
+from PySide6.QtGui import QColor, QDrag, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QMenu,
     QPushButton, QSlider, QSpinBox, QToolButton, QTreeWidget, QVBoxLayout,
     QWidget, QWidgetItem,
 )
+
+from .theme import CATEGORY_COLOR_LABELS, CATEGORY_PALETTE
 
 SLIDER_STEPS = 1000
 MIME_CONTROL = "application/x-vrc-parameter-relay-control"      # move existing card
@@ -350,11 +352,14 @@ class CategoryBox(QFrame):
     category_drag_over = Signal(str, str)    # dragged_cat_id, hovered_cat_id
     category_drag_done = Signal()            # drag ended (any outcome)
     copy_to_preset = Signal(str, str)        # cat_id, target_preset_id
+    color_changed = Signal(str, str)         # cat_id, color key
 
     def __init__(self, category: dict[str, Any]) -> None:
         super().__init__()
         self.category = category
         self.setObjectName("Category")
+        # picked up by the per-colour QSS variants in theme.py
+        self.setProperty("catcolor", category.get("color") or "green")
         self.setAcceptDrops(True)
         self._cat_press: QPoint | None = None
         self._ghost: Optional[QLabel] = None
@@ -425,13 +430,24 @@ class CategoryBox(QFrame):
 
     def _show_menu(self) -> None:
         menu = QMenu(self)
+        color_menu = menu.addMenu("Color")
+        current = self.category.get("color") or "green"
+        for key, label in CATEGORY_COLOR_LABELS.items():
+            swatch = QPixmap(12, 12)
+            swatch.fill(QColor(CATEGORY_PALETTE[key][0]))
+            action = color_menu.addAction(QIcon(swatch), label)
+            action.setCheckable(True)
+            action.setChecked(key == current)
+            action.triggered.connect(
+                lambda _=False, k=key:
+                self.color_changed.emit(self.category["id"], k))
         if self._copy_targets:
             copy_menu = menu.addMenu("Copy to preset")
             for preset_id, name in self._copy_targets:
                 copy_menu.addAction(
                     name, lambda pid=preset_id:
                     self.copy_to_preset.emit(self.category["id"], pid))
-            menu.addSeparator()
+        menu.addSeparator()
         menu.addAction("Delete category",
                        lambda: self.delete_requested.emit(self.category["id"]))
         menu.exec(self.mapToGlobal(QPoint(self.width() - 10, 34)))

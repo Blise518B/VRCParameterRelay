@@ -128,10 +128,14 @@ class Store:
 
 DEFAULT_CATEGORY_COUNT = 4  # a 2x2 grid out of the box
 
+# valid per-category accent colours (the UI maps them to actual hues)
+CATEGORY_COLORS = ("green", "blue", "cyan", "yellow", "red", "purple")
+
 
 def default_categories() -> list[dict[str, Any]]:
     return [
-        {"id": new_control_id(), "name": f"Category {i + 1}", "locked": False}
+        {"id": new_control_id(), "name": f"Category {i + 1}", "locked": False,
+         "color": "green"}
         for i in range(DEFAULT_CATEGORY_COUNT)
     ]
 
@@ -148,6 +152,8 @@ def normalize_preset(preset: dict[str, Any]) -> dict[str, Any]:
         cat.setdefault("id", new_control_id())
         cat.setdefault("name", "Category")
         cat["locked"] = bool(cat.get("locked"))
+        if cat.get("color") not in CATEGORY_COLORS:
+            cat["color"] = "green"
     preset["categories"] = cats
 
     controls = preset.get("controls")

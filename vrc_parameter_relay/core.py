@@ -30,7 +30,9 @@ import logging
 import threading
 from typing import Any, Callable, Optional
 
-from .store import Store, new_control_id, normalize_profile, short_avatar_name
+from .store import (
+    CATEGORY_COLORS, Store, new_control_id, normalize_profile, short_avatar_name,
+)
 
 log = logging.getLogger(__name__)
 
@@ -351,7 +353,7 @@ class AppCore:
             cats = self.board["categories"]
             cat = {"id": new_control_id(),
                    "name": (name or f"Category {len(cats) + 1}")[:60],
-                   "locked": False}
+                   "locked": False, "color": "green"}
             cats.append(cat)
             self._save()
         self._emit_board()
@@ -376,6 +378,11 @@ class AppCore:
 
     def set_category_locked(self, cat_id: str, locked: bool) -> bool:
         return self._edit_category(cat_id, lambda c: c.update(locked=bool(locked)))
+
+    def set_category_color(self, cat_id: str, color: str) -> bool:
+        if color not in CATEGORY_COLORS:
+            return False
+        return self._edit_category(cat_id, lambda c: c.update(color=color))
 
     def _edit_category(self, cat_id: str, mutate) -> bool:
         with self._lock:

@@ -451,6 +451,7 @@ class MainWindow(QMainWindow):
             box.category_drag_done.connect(self._clear_cat_ghost)
             box.set_copy_targets(other_presets)
             box.copy_to_preset.connect(self.core.copy_category_to_preset)
+            box.color_changed.connect(self.core.set_category_color)
             self.boxes[category["id"]] = box
             for control in board["controls"]:
                 if control.get("cat") != category["id"]:
@@ -799,10 +800,11 @@ range, invert ⇄ for backwards logic).</p>
 <h2>Boards, categories &amp; presets</h2>
 <p>Controls live in categories. Drag cards by their ⠿ grip to rearrange or
 move them; drag a whole category by the grip in its header. The 🔒 on a
-category blocks <i>guests</i> from using it (you still can). Each avatar can
-have several <b>presets</b> (separate board layouts) — switch with the
-dropdown in the header, manage with the ⋯ next to it, and copy a category to
-another preset via the category's ⋯ menu.</p>
+category blocks <i>guests</i> from using it (you still can). Each category
+can have its own accent colour — pick one under ⋯ → <i>Color</i>. Each
+avatar can have several <b>presets</b> (separate board layouts) — switch
+with the dropdown in the header, manage with the ⋯ next to it, and copy a
+category to another preset via the category's ⋯ menu.</p>
 
 <h2>Avatar library</h2>
 <p>Give an avatar a name (the big field top-left) and it's kept for offline
