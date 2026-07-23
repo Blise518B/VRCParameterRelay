@@ -18,15 +18,20 @@ THEME_LABELS = {"broker": "Broker (default)", "neon": "Classic neon"}
 THEME_ORDER = ["broker", "neon"]
 DEFAULT_THEME = "broker"
 
-# Selectable UI fonts (all ship with Windows). (family, one-line note)
+# Selectable UI fonts. Missing families fall back to Segoe UI, so it's safe
+# to offer Office/Win11 fonts — a friend without them just sees the fallback.
+# (family, one-line note)
 DEFAULT_FONT = "Segoe UI"
 FONT_CHOICES = [
     ("Segoe UI", "clean modern sans — the default"),
+    ("Segoe UI Variable", "refined, softer — Mac-like (Win 11)"),
+    ("Corbel", "soft, gently rounded"),
+    ("Century Gothic", "very round, geometric"),
+    ("Dubai", "clean, even, modern"),
+    ("Trebuchet MS", "rounded, friendly"),
     ("Bahnschrift", "condensed, technical"),
     ("Cascadia Code", "coding mono"),
     ("Consolas", "classic mono"),
-    ("Trebuchet MS", "rounded, friendly"),
-    ("Verdana", "wide, high legibility"),
 ]
 
 # Vibrant per-category palette (GPU-broker hues): key -> (vibrant, mid, tint)
