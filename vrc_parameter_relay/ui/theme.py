@@ -189,8 +189,11 @@ QToolButton#AvatarMenu {
 }
 QToolButton#AvatarMenu:hover { color: #7dffab; }
 
-QToolButton#GearBtn { border: none; color: #94a698; font-size: 16px; padding: 2px 6px; }
-QToolButton#GearBtn:hover { color: #7dffab; }
+/* same outlined button as its neighbours, with a flat white pictogram */
+QPushButton#GearBtn {
+    font-family: 'Segoe MDL2 Assets', 'Segoe Fluent Icons';
+    font-size: 15px; padding: 7px 0; color: #f2f8f3;
+}
 
 QComboBox#PresetCombo { padding: 5px 10px; }
 
@@ -415,8 +418,11 @@ QToolButton#AvatarMenu {
 }
 QToolButton#AvatarMenu:hover { color: #7dffb0; }
 
-QToolButton#GearBtn { border: none; color: #7c8a80; font-size: 16px; padding: 2px 6px; }
-QToolButton#GearBtn:hover { color: #4af58c; }
+/* same outlined button as its neighbours, with a flat white pictogram */
+QPushButton#GearBtn {
+    font-family: 'Segoe MDL2 Assets', 'Segoe Fluent Icons';
+    font-size: 15px; padding: 7px 0; color: #f2f8f3;
+}
 
 QComboBox#PresetCombo { padding: 5px 10px; }
 

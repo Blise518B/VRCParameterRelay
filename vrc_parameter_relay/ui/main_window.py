@@ -204,8 +204,10 @@ class MainWindow(QMainWindow):
         help_btn.setFixedWidth(34)
         help_btn.setToolTip("Help")
         help_btn.clicked.connect(lambda: HelpDialog(self).exec())
-        self.gear_btn = QToolButton(objectName="GearBtn")
-        self.gear_btn.setText("⚙")
+        #  = Segoe MDL2 "Setting" — a flat monochrome pictogram, so it
+        # matches the other header buttons instead of a colour emoji gear
+        self.gear_btn = QPushButton("", objectName="GearBtn")
+        self.gear_btn.setFixedWidth(34)
         self.gear_btn.setToolTip("Settings — design && font")
         self.gear_btn.setCursor(Qt.PointingHandCursor)
         self.gear_btn.clicked.connect(self._open_settings)
