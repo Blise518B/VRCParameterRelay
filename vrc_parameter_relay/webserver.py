@@ -37,6 +37,8 @@ class GuestServer:
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._sockets: Set[web.WebSocketResponse] = set()
         self._names: dict[web.WebSocketResponse, str] = {}
+        self._ids: dict[web.WebSocketResponse, int] = {}
+        self._guest_seq = 0  # per-session counter behind "Anonymous #N"
         self._thread: Optional[threading.Thread] = None
         self.on_guests = lambda n: None
         core.add_listener(self._core_event)
@@ -110,6 +112,8 @@ class GuestServer:
         # Guests stay connected even while paused — they just see a "paused"
         # overlay and their inputs are ignored server-side until resume.
         self._sockets.add(ws)
+        self._guest_seq += 1
+        self._ids[ws] = self._guest_seq
         self._names[ws] = _clean_name(request.query.get("n", ""))
         self._notify_guests()
         await ws.send_json(self._hello_payload())
@@ -142,11 +146,14 @@ class GuestServer:
         finally:
             self._sockets.discard(ws)
             self._names.pop(ws, None)
+            self._ids.pop(ws, None)
             self._notify_guests()
         return ws
 
     def _notify_guests(self) -> None:
-        names = [n for n in self._names.values() if n]
+        # one entry per guest, in connect order; unnamed guests get a stable tag
+        names = [name or f"Anonymous #{self._ids.get(ws, 0)}"
+                 for ws, name in self._names.items()]
         self.on_guests(len(self._sockets))
         self.core.emit({"t": "guests", "count": len(self._sockets), "names": names})
 

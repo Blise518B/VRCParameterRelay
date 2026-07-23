@@ -42,6 +42,34 @@ QPushButton#SyncBtn {
     font-size: 14px; padding: 7px 0;
 }
 
+QLabel#LiveBadge {
+    border-radius: 9px; padding: 1px 9px; font-size: 11px; font-weight: 700;
+}
+QLabel#LiveBadge[state="live"] {
+    background: #10331d; color: #3af0a0; border: 1px solid #22c55e;
+}
+QLabel#LiveBadge[state="offline"] {
+    background: #331014; color: #ff6b81; border: 1px solid #a52a38;
+}
+
+QPushButton#PauseBtn {
+    font-family: 'Segoe MDL2 Assets', 'Segoe Fluent Icons';
+    font-size: 14px; padding: 7px 0;
+    color: #ff6b81; border-color: #a52a38;
+}
+QPushButton#PauseBtn:hover { background: #2a1216; }
+QPushButton#PauseBtn[state="paused"] {
+    color: #facc15; border-color: #8a6d1a; background: #2a2410;
+}
+QPushButton#PauseBtn[state="paused"]:hover { background: #3a3216; }
+QPushButton#PauseBtn:disabled { color: #4a3f42; border-color: #2d2226; }
+
+QPushButton#ChipBtn {
+    background: #131a15; border: 1px solid %(edge)s; border-radius: 10px;
+    padding: 0 12px; color: #94a698; font-size: 12px;
+}
+QPushButton#ChipBtn:hover { background: #142418; color: #b8ccbb; }
+
 QPushButton#HelpBtn { font-weight: 700; padding: 7px 0; }
 
 QToolButton#AvatarMenu {

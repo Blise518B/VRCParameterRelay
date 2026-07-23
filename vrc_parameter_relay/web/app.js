@@ -19,7 +19,24 @@ let yoloFilter = "";
 const cards = new Map();     // control id -> updater fn
 const paramRows = new Map(); // param name -> updater fn (YOLO list)
 
-let guestName = localStorage.getItem("vrcpr_name") || "";
+// The name survives in localStorage AND in the page URL (?n=), so it comes
+// back even when the browser blocks storage — and a bookmarked link keeps it.
+const urlName = (new URLSearchParams(location.search).get("n") || "")
+  .trim().slice(0, 24);
+let guestName = "";
+try { guestName = localStorage.getItem("vrcpr_name") || ""; } catch (e) {}
+if (urlName) guestName = urlName;
+
+function rememberName() {
+  try { localStorage.setItem("vrcpr_name", guestName); } catch (e) {}
+  try {
+    const u = new URL(location.href);
+    if (guestName) u.searchParams.set("n", guestName);
+    else u.searchParams.delete("n");
+    history.replaceState(null, "", u);
+  } catch (e) {}
+}
+if (guestName) rememberName();
 
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -416,7 +433,7 @@ function askName() {
   const entered = prompt("Your name (shown to the host):", guestName);
   if (entered === null) return;
   guestName = entered.trim().slice(0, 24);
-  localStorage.setItem("vrcpr_name", guestName);
+  rememberName();
   document.getElementById("nameBtn").textContent = guestName ? `✎ ${guestName}` : "✎ set name";
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ t: "name", name: guestName }));

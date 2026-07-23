@@ -119,6 +119,13 @@ def main() -> None:
     check("name is gone after disconnect",
           guest_events[-1]["count"] == 0 and guest_events[-1]["names"] == [])
 
+    # unnamed guests get a stable anonymous tag instead of being invisible
+    guest_events.clear()
+    loop.run_until_complete(ws_first_message(url))
+    anon = [e for e in guest_events if e["count"] == 1]
+    check("unnamed guest shows as Anonymous #N",
+          anon and anon[0]["names"] and anon[0]["names"][0].startswith("Anonymous #"))
+
     print("ALL SHARE-GATE TESTS PASSED")
 
 

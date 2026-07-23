@@ -57,6 +57,7 @@ class MainWindow(QMainWindow):
         self.cards: dict[str, ControlCard] = {}      # control id -> card
         self.param_items: dict[str, QTreeWidgetItem] = {}
         self.guest_count = 0
+        self.guest_names: list[str] = []
 
         self.setWindowTitle(APP_NAME)
         self.resize(1080, 640)
@@ -86,6 +87,7 @@ class MainWindow(QMainWindow):
 
         self._rebuild_board()
         self._refresh_params(core.param_snapshot())
+        self._refresh_pause_btn()
         self._start_update_check()
 
     # -- layout -----------------------------------------------------------------
@@ -115,6 +117,11 @@ class MainWindow(QMainWindow):
         self.avatar_menu_btn.setCursor(Qt.PointingHandCursor)
         self.avatar_menu_btn.clicked.connect(self._show_avatar_menu)
         name_row.addWidget(self.avatar_menu_btn)
+        name_row.addSpacing(6)
+        self.live_badge = QLabel("", objectName="LiveBadge")
+        self.live_badge.setFixedHeight(20)
+        self.live_badge.setVisible(False)
+        name_row.addWidget(self.live_badge, 0, Qt.AlignVCenter)
         name_row.addStretch(1)
         self.avatar_label = QLabel("waiting for VRChat…", objectName="AvatarId")
         self.avatar_label.setMinimumWidth(60)  # allow clipping instead of forcing width
@@ -136,7 +143,10 @@ class MainWindow(QMainWindow):
         lay.addWidget(preset_menu_btn)
 
         self.vrc_chip = QLabel("VRChat: searching", objectName="Chip")
-        self.guest_chip = QLabel("guests: 0", objectName="Chip")
+        self.guest_chip = QPushButton("guests: 0", objectName="ChipBtn")
+        self.guest_chip.setCursor(Qt.PointingHandCursor)
+        self.guest_chip.setToolTip("Click to see who's connected")
+        self.guest_chip.clicked.connect(self._show_guest_list)
         lay.addWidget(self.vrc_chip)
         lay.addWidget(self.guest_chip)
 
@@ -158,6 +168,9 @@ class MainWindow(QMainWindow):
         cat_btn = QPushButton("＋ Category")
         cat_btn.setToolTip("Add another category box to the board")
         cat_btn.clicked.connect(lambda: self.core.add_category())
+        self.pause_btn = QPushButton("", objectName="PauseBtn")  # MDL2 stop
+        self.pause_btn.setFixedWidth(36)
+        self.pause_btn.clicked.connect(self._toggle_pause)
         share_btn = QPushButton("Share", objectName="Primary")
         share_btn.clicked.connect(self._open_share)
         help_btn = QPushButton("?", objectName="HelpBtn")
@@ -165,13 +178,14 @@ class MainWindow(QMainWindow):
         help_btn.setToolTip("Help")
         help_btn.clicked.connect(lambda: HelpDialog(self).exec())
         lay.addWidget(cat_btn)
+        lay.addWidget(self.pause_btn)
         lay.addWidget(share_btn)
         lay.addWidget(help_btn)
 
         # chips are QLabels that would otherwise stretch to the header's height
         for widget in (self.vrc_chip, self.guest_chip, self.yolo_btn, sync_btn,
-                       cat_btn, share_btn, help_btn, self.preset_combo,
-                       preset_menu_btn):
+                       cat_btn, self.pause_btn, share_btn, help_btn,
+                       self.preset_combo, preset_menu_btn):
             widget.setFixedHeight(34)
 
         # full-window header (above the dock too) so its width requirement
@@ -309,17 +323,20 @@ class MainWindow(QMainWindow):
             self._update_vrc_chip(event)
         elif t == "tunnel":
             self.share_dialog.update_tunnel(event)
+            self._refresh_pause_btn()
         elif t == "guests":
             self.guest_count = event["count"]
-            names = event.get("names") or []
+            self.guest_names = event.get("names") or []
             self.guest_chip.setText(f"guests: {self.guest_count}")
-            self.guest_chip.setToolTip("Connected: " + ", ".join(names)
-                                       if names else "")
-            self.share_dialog.update_guests(self.guest_count, names)
+            self.guest_chip.setToolTip(
+                "Connected: " + ", ".join(self.guest_names) if self.guest_names
+                else "Click to see who's connected")
+            self.share_dialog.update_guests(self.guest_count, self.guest_names)
         elif t == "token":
             self.share_dialog.refresh_state()
         elif t == "sharing":
             self.share_dialog.refresh_state()
+            self._refresh_pause_btn()
         elif t == "yolo":
             self.yolo_btn.blockSignals(True)
             self.yolo_btn.setChecked(event["enabled"])
@@ -449,10 +466,26 @@ class MainWindow(QMainWindow):
     def _refresh_avatar_header(self) -> None:
         self.board_name.setText(self.core.avatar_name)
         live = self.core.is_live
-        dot = '<span style="color:#31f272">●</span> ' if live else ""
-        suffix = "" if live else "  (offline)" if self.core.avatar_id else ""
-        self.avatar_label.setText(
-            f'{dot}{self.core.avatar_id or "waiting for VRChat…"}{suffix}')
+        avatar_id = self.core.avatar_id
+        self.live_badge.setVisible(avatar_id is not None)
+        if avatar_id is not None:
+            self.live_badge.setText("● LIVE" if live else "✎ OFFLINE")
+            self.live_badge.setProperty("state", "live" if live else "offline")
+            self.live_badge.setToolTip(
+                "You're wearing this avatar in VRChat — controls are live"
+                if live else
+                "Editing only — you're not wearing this avatar,\n"
+                "nothing is sent to VRChat")
+            self.live_badge.style().unpolish(self.live_badge)
+            self.live_badge.style().polish(self.live_badge)
+        if live:
+            self.avatar_label.setText(
+                f'<span style="color:#31f272">●</span> {avatar_id}')
+        elif avatar_id is not None:
+            self.avatar_label.setText(
+                f'<span style="color:#c9525f">{avatar_id}</span>')
+        else:
+            self.avatar_label.setText("waiting for VRChat…")
         self.preset_combo.blockSignals(True)
         self.preset_combo.clear()
         for preset in self.core.list_presets():
@@ -613,6 +646,43 @@ class MainWindow(QMainWindow):
 
     # -- sharing ------------------------------------------------------------------------
 
+    def _show_guest_list(self) -> None:
+        menu = QMenu(self)
+        if not self.guest_names:
+            menu.addAction("No guests connected").setEnabled(False)
+        else:
+            for name in self.guest_names:
+                menu.addAction(name)
+        menu.exec(self.guest_chip.mapToGlobal(self.guest_chip.rect().bottomLeft()))
+
+    def _toggle_pause(self) -> None:
+        if self.core.sharing_enabled:
+            self.core.set_sharing(False)   # emergency stop — guests stay connected
+        elif self.tunnel.state in ("downloading", "starting", "online"):
+            self.core.set_sharing(True)
+        else:
+            self._open_share()             # nothing to pause — offer to start
+
+    def _refresh_pause_btn(self) -> None:
+        tunnel_up = self.tunnel.state in ("downloading", "starting", "online")
+        if self.core.sharing_enabled:
+            self.pause_btn.setText("")  # MDL2 stop square
+            self.pause_btn.setProperty("state", "")
+            self.pause_btn.setToolTip(
+                "Emergency stop — pause sharing.\n"
+                "Guests stay connected but all their input is blocked.")
+        elif tunnel_up:
+            self.pause_btn.setText("")  # MDL2 play
+            self.pause_btn.setProperty("state", "paused")
+            self.pause_btn.setToolTip("Sharing is paused — click to resume")
+        else:
+            self.pause_btn.setText("")
+            self.pause_btn.setProperty("state", "")
+            self.pause_btn.setToolTip("Sharing is off")
+        self.pause_btn.setEnabled(self.core.sharing_enabled or tunnel_up)
+        self.pause_btn.style().unpolish(self.pause_btn)
+        self.pause_btn.style().polish(self.pause_btn)
+
     def _open_share(self) -> None:
         self.share_dialog.show()
         self.share_dialog.raise_()
@@ -655,17 +725,21 @@ another preset via the category's ⋯ menu.</p>
 
 <h2>Avatar library</h2>
 <p>Give an avatar a name (the big field top-left) and it's kept for offline
-editing: click ▾ to open any saved avatar without VRChat running. The green
-● marks the avatar you're actually wearing; controls only send to VRChat
-when you're viewing the worn avatar.</p>
+editing: click ▾ to open any saved avatar without VRChat running. The badge
+next to the name shows the state — green <b>● LIVE</b> means you're wearing
+this avatar and controls are live; red <b>✎ OFFLINE</b> means you're only
+editing, and nothing is sent to VRChat.</p>
 
 <h2>Sharing</h2>
 <p><b>Share → Start sharing</b> creates a public link (no port forwarding —
 a Cloudflare quick tunnel; downloads itself on first use). Guests see only
-your board and can set a display name so you know who's connected.
-<b>Pause</b> blocks guests without disconnecting them; <b>Reset link</b>
-invalidates every link you've handed out. For a link that survives app
-restarts, set up a free ngrok static domain in <i>Link settings</i>.</p>
+your board and can set a display name so you know who's connected — click
+the <b>guests</b> chip to see the list (unnamed guests show as
+<i>Anonymous&nbsp;#N</i>). The red <b>stop button</b> in the header is an
+emergency stop: it pauses everyone instantly without disconnecting them;
+click again to resume. <b>Reset link</b> invalidates every link you've
+handed out. For a link that survives app restarts, set up a free ngrok
+static domain in <i>Link settings</i>.</p>
 
 <h2>⚡ YOLO mode</h2>
 <p>The header toggle gives guests the <i>full</i> parameter list and control
