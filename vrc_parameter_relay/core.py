@@ -351,9 +351,13 @@ class AppCore:
     def add_category(self, name: Optional[str] = None) -> Optional[dict]:
         with self._lock:
             cats = self.board["categories"]
+            used = {c.get("color") for c in cats}
+            # prefer a colour not already on the board; cycle once all are used
+            color = next((c for c in CATEGORY_COLORS if c not in used),
+                         CATEGORY_COLORS[len(cats) % len(CATEGORY_COLORS)])
             cat = {"id": new_control_id(),
                    "name": (name or f"Category {len(cats) + 1}")[:60],
-                   "locked": False, "color": "green"}
+                   "locked": False, "color": color}
             cats.append(cat)
             self._save()
         self._emit_board()

@@ -76,10 +76,12 @@ def main() -> None:
     check("guest works after unlock",
           core.set_control_value(hoodie["id"], True, source="guest"))
 
-    # category colours (4 defaults + the added NSFW, which starts green)
+    # category colours: 4 defaults, and add_category("NSFW") earlier picked
+    # the first colour not already used (cyan)
     check("new boards spawn red/green/yellow/blue",
-          [c.get("color") for c in core.board["categories"]]
-          == ["red", "green", "yellow", "blue", "green"])
+          [c.get("color") for c in core.board["categories"][:4]]
+          == ["red", "green", "yellow", "blue"])
+    check("added category takes an unused colour (cyan)", nsfw["color"] == "cyan")
     check("set category color", core.set_category_color(nsfw["id"], "red"))
     check("color stored", nsfw["color"] == "red")
     check("invalid color rejected",
