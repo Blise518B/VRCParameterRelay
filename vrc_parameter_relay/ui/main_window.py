@@ -7,14 +7,14 @@ import threading
 import urllib.request
 from typing import Any, Optional
 
-from PySide6.QtCore import QObject, QSize, Qt, QUrl, Signal
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDockWidget, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
-    QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton, QRadioButton,
-    QScrollArea, QTextBrowser, QToolButton, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget,
+    QDockWidget, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog,
+    QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
+    QRadioButton, QScrollArea, QTextBrowser, QToolButton, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__
@@ -905,18 +905,36 @@ class SettingsDialog(QDialog):
                         objectName="SettingsHint")
         hint_f.setWordWrap(True)
         fl.addWidget(hint_f)
+
+        # the list is long — scroll it so the dialog stays a sane height
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setMaximumHeight(300)
+        holder = QWidget()
+        hl = QVBoxLayout(holder)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(6)
         self._font_group = QButtonGroup(self)
         current_font = settings.get("font") or DEFAULT_FONT
+        checked_radio = None
         for family, note in FONT_CHOICES:
             radio = QRadioButton(f"{family}  —  {note}")
             radio.setChecked(family == current_font)
+            if family == current_font:
+                checked_radio = radio
             # each row previews its own font; a widget stylesheet outranks the
             # app-wide one, so the preview survives when the app font changes
             radio.setStyleSheet("QRadioButton { font-family: '%s'; font-size: 13px; }"
                                 % family)
             radio.toggled.connect(lambda on, f=family: on and self.main._set_font(f))
             self._font_group.addButton(radio)
-            fl.addWidget(radio)
+            hl.addWidget(radio)
+        hl.addStretch(1)
+        scroll.setWidget(holder)
+        fl.addWidget(scroll)
+        if checked_radio is not None:
+            QTimer.singleShot(0, lambda: scroll.ensureWidgetVisible(checked_radio))
         lay.addWidget(font_box)
 
         close = QPushButton("Close")

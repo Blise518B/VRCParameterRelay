@@ -30,9 +30,17 @@ FONT_CHOICES = [
     ("Dubai", "clean, even, modern"),
     ("Trebuchet MS", "rounded, friendly"),
     ("Bahnschrift", "condensed, technical"),
-    ("Orbitron", "geometric sci-fi (bundled)"),
     ("Cascadia Code", "coding mono"),
     ("Consolas", "classic mono"),
+    # bundled sci-fi / techno faces (ship inside the exe)
+    ("Orbitron", "geometric sci-fi (bundled)"),
+    ("Michroma", "wide, clean sci-fi (bundled)"),
+    ("Rajdhani", "condensed HUD techno (bundled)"),
+    ("Chakra Petch", "squarish sci-fi (bundled)"),
+    ("Exo 2", "modern techy, versatile (bundled)"),
+    ("Aldrich", "square techno (bundled)"),
+    ("Audiowide", "retro-futuristic (bundled)"),
+    ("Electrolize", "clean techno (bundled)"),
 ]
 
 # Vibrant per-category palette (GPU-broker hues): key -> (vibrant, mid, tint)
