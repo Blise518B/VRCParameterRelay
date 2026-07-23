@@ -131,11 +131,15 @@ DEFAULT_CATEGORY_COUNT = 4  # a 2x2 grid out of the box
 # valid per-category accent colours (the UI maps them to actual hues)
 CATEGORY_COLORS = ("green", "blue", "cyan", "yellow", "red", "purple")
 
+# a fresh board's 2x2 grid comes pre-coloured
+DEFAULT_CATEGORY_COLOR_ORDER = ("red", "green", "yellow", "blue")
+
 
 def default_categories() -> list[dict[str, Any]]:
+    order = DEFAULT_CATEGORY_COLOR_ORDER
     return [
         {"id": new_control_id(), "name": f"Category {i + 1}", "locked": False,
-         "color": "green"}
+         "color": order[i % len(order)]}
         for i in range(DEFAULT_CATEGORY_COUNT)
     ]
 

@@ -35,7 +35,11 @@ CATEGORY_COLOR_LABELS = {
 
 
 def _broker_cat_variants() -> str:
-    """Broker: dark-tinted header bar, vibrant title, hue-toned frame border."""
+    """Broker: dark-tinted header bar, vibrant title, hue-toned frame border.
+
+    The control cards inside follow the group colour: card borders take the
+    mid tone, grips and ⋯ menus the vibrant hue.
+    """
     out = []
     for key, (vib, mid, tint) in CATEGORY_PALETTE.items():
         out.append(f"""
@@ -44,6 +48,10 @@ QFrame#Category[catcolor="{key}"] QWidget#CatHeader {{ background: {tint}; }}
 QFrame#Category[catcolor="{key}"] QLineEdit#CatName {{ color: {vib}; }}
 QFrame#Category[catcolor="{key}"] QLineEdit#CatName:focus {{ background: {mid}; }}
 QFrame#Category[catcolor="{key}"] QLabel#CatGrip {{ color: {vib}; }}
+QFrame#Category[catcolor="{key}"] QFrame#Card {{ border: 1px solid {mid}; }}
+QFrame#Category[catcolor="{key}"] QLabel#CardGrip {{ color: {vib}; }}
+QFrame#Category[catcolor="{key}"] QToolButton#CardMenu {{ color: {vib}; }}
+QFrame#Category[catcolor="{key}"] QLabel#CatHint {{ border: 1px dashed {mid}; }}
 """)
     return "".join(out)
 
@@ -62,10 +70,15 @@ _NEON_CAT_BARS = {
 def _neon_cat_variants() -> str:
     out = []
     for key, (bar, focus, border) in _NEON_CAT_BARS.items():
+        vib = CATEGORY_PALETTE[key][0]
         out.append(f"""
 QFrame#Category[catcolor="{key}"] {{ border: 1px solid {border}; }}
 QFrame#Category[catcolor="{key}"] QWidget#CatHeader {{ background: {bar}; }}
 QFrame#Category[catcolor="{key}"] QLineEdit#CatName:focus {{ background: {focus}; }}
+QFrame#Category[catcolor="{key}"] QFrame#Card {{ border: 1px solid {border}; }}
+QFrame#Category[catcolor="{key}"] QLabel#CardGrip {{ color: {vib}; }}
+QFrame#Category[catcolor="{key}"] QToolButton#CardMenu {{ color: {vib}; }}
+QFrame#Category[catcolor="{key}"] QLabel#CatHint {{ border: 1px dashed {border}; }}
 """)
     return "".join(out)
 

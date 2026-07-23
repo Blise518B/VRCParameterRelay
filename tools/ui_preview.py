@@ -52,9 +52,7 @@ def seed(core) -> None:
     core.add_control("Brightness", "slider", "Brightness", 0, 1, category=cats[2]["id"])
     core.add_control("OutfitIndex", "int", "Outfit", 0, 5, category=cats[2]["id"])
     core.set_category_locked(cats[1]["id"], True)
-    core.set_category_color(cats[1]["id"], "red")
-    core.set_category_color(cats[2]["id"], "blue")
-    core.set_category_color(cats[3]["id"], "yellow")
+    # categories keep their default red/green/yellow/blue colours
     core.rename_avatar("Demo Avatar")
     base = core.board["id"]
     core.add_preset("Alt layout")
