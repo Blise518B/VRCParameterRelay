@@ -2,7 +2,7 @@
 import sys
 from pathlib import Path
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 APP_NAME = "VRC Parameter Relay"
 DATA_DIR_NAME = "VRCParameterRelay"
 AUTHOR = "Blise518B"

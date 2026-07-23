@@ -38,6 +38,23 @@ header {
 
 .brand { display: flex; align-items: center; gap: 10px; }
 
+.name-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--card-edge);
+  border-radius: 8px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.name-btn:hover { color: var(--text); border-color: var(--accent); }
+
 h1 { font-size: 20px; margin: 0; font-weight: 650; }
 
 .dot {

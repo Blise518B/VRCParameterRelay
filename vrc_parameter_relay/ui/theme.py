@@ -42,6 +42,16 @@ QPushButton#SyncBtn {
     font-size: 14px; padding: 7px 0;
 }
 
+QPushButton#HelpBtn { font-weight: 700; padding: 7px 0; }
+
+QToolButton#AvatarMenu {
+    border: none; color: #3fce74; font-size: 13px; font-weight: 700;
+    padding: 2px 4px;
+}
+QToolButton#AvatarMenu:hover { color: #7dffab; }
+
+QComboBox#PresetCombo { padding: 5px 10px; }
+
 QPushButton#YoloToggle {
     border: 1px solid #3a2f1c; color: #8f7f60; font-weight: 600; padding: 7px 12px;
 }

@@ -77,26 +77,43 @@ class Store:
         self.set("guest_token", token)
         return token
 
-    # -- boards -----------------------------------------------------------
+    # -- avatar profiles ---------------------------------------------------
 
-    def _board_path(self, avatar_id: str) -> Path:
+    def _profile_path(self, avatar_id: str) -> Path:
         safe = re.sub(r"[^A-Za-z0-9_\-]", "_", str(avatar_id))[:120]
         return self.avatar_dir / f"{safe}.json"
 
-    def load_board(self, avatar_id: str) -> dict[str, Any]:
+    def load_profile(self, avatar_id: str) -> dict[str, Any]:
         with self._lock:
-            board: dict[str, Any] = {}
+            data: dict[str, Any] = {}
             try:
-                loaded = json.loads(self._board_path(avatar_id).read_text("utf-8"))
+                loaded = json.loads(self._profile_path(avatar_id).read_text("utf-8"))
                 if isinstance(loaded, dict):
-                    board = loaded
+                    data = loaded
             except (OSError, ValueError):
                 pass
-            return normalize_board(board, avatar_id)
+            return normalize_profile(data, avatar_id)
 
-    def save_board(self, board: dict[str, Any]) -> None:
+    def save_profile(self, profile: dict[str, Any]) -> None:
         with self._lock:
-            self._write_json(self._board_path(board["avatar_id"]), board)
+            self._write_json(self._profile_path(profile["avatar_id"]), profile)
+
+    def list_profiles(self) -> list[dict[str, Any]]:
+        """Saved avatars for the offline library: [{avatar_id, name, named}]."""
+        out = []
+        with self._lock:
+            for path in sorted(self.avatar_dir.glob("*.json")):
+                try:
+                    data = json.loads(path.read_text("utf-8"))
+                except (OSError, ValueError):
+                    continue
+                avatar_id = data.get("avatar_id")
+                if not avatar_id:
+                    continue
+                name = data.get("name") or short_avatar_name(avatar_id)
+                out.append({"avatar_id": avatar_id, "name": name,
+                            "named": name != short_avatar_name(avatar_id)})
+        return out
 
     @staticmethod
     def _write_json(path: Path, obj: Any) -> None:
@@ -109,36 +126,64 @@ class Store:
 DEFAULT_CATEGORY_COUNT = 4  # a 2x2 grid out of the box
 
 
-def normalize_board(board: dict[str, Any], avatar_id: str) -> dict[str, Any]:
-    """Ensure a board has a name, categories, and valid control->category refs.
+def default_categories() -> list[dict[str, Any]]:
+    return [
+        {"id": new_control_id(), "name": f"Category {i + 1}", "locked": False}
+        for i in range(DEFAULT_CATEGORY_COUNT)
+    ]
 
-    Also migrates pre-category boards: their controls land in the first
-    default category.
-    """
-    board["avatar_id"] = avatar_id
-    board.setdefault("name", short_avatar_name(avatar_id))
 
-    cats = board.get("categories")
+def normalize_preset(preset: dict[str, Any]) -> dict[str, Any]:
+    """Ensure a preset has an id, name, categories, and valid control refs."""
+    preset.setdefault("id", new_control_id())
+    preset.setdefault("name", "Default")
+
+    cats = preset.get("categories")
     if not isinstance(cats, list) or not cats:
-        cats = [
-            {"id": new_control_id(), "name": f"Category {i + 1}", "locked": False}
-            for i in range(DEFAULT_CATEGORY_COUNT)
-        ]
+        cats = default_categories()
     for cat in cats:
         cat.setdefault("id", new_control_id())
         cat.setdefault("name", "Category")
         cat["locked"] = bool(cat.get("locked"))
-    board["categories"] = cats
+    preset["categories"] = cats
 
-    controls = board.get("controls")
+    controls = preset.get("controls")
     if not isinstance(controls, list):
         controls = []
     valid_ids = {c["id"] for c in cats}
     for ctrl in controls:
         if ctrl.get("cat") not in valid_ids:
             ctrl["cat"] = cats[0]["id"]
-    board["controls"] = controls
-    return board
+    preset["controls"] = controls
+    return preset
+
+
+def normalize_profile(data: dict[str, Any], avatar_id: str) -> dict[str, Any]:
+    """Ensure an avatar profile has name, saved params, and >=1 preset.
+
+    Migrates single-board files (v1.1.0 and earlier: categories/controls at
+    the top level) into a profile with one "Default" preset.
+    """
+    data["avatar_id"] = avatar_id
+    data.setdefault("name", short_avatar_name(avatar_id))
+
+    params = data.get("params")
+    data["params"] = params if isinstance(params, dict) else {}
+
+    presets = data.get("presets")
+    if not isinstance(presets, list) or not presets:
+        # old single-board layout (or a fresh avatar)
+        presets = [{"id": new_control_id(), "name": "Default",
+                    "categories": data.pop("categories", None),
+                    "controls": data.pop("controls", None)}]
+    data["presets"] = [normalize_preset(p) for p in presets]
+    data.pop("categories", None)
+    data.pop("controls", None)
+
+    preset_ids = {p["id"] for p in data["presets"]}
+    if data.get("active_preset") not in preset_ids:
+        data["active_preset"] = data["presets"][0]["id"]
+    return data
 
 
 def new_token() -> str:

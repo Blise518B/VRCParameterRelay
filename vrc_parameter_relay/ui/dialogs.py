@@ -246,8 +246,12 @@ class ShareDialog(QDialog):
                               "the app runs; a new one is made after a restart or Reset. "
                               "For a permanent link, open Link settings.")
 
-    def update_guests(self, n: int) -> None:
-        self.guests_label.setText(f"{n} guest{'s' if n != 1 else ''} connected")
+    def update_guests(self, n: int, names: Optional[list] = None) -> None:
+        text = f"{n} guest{'s' if n != 1 else ''} connected"
+        if names:
+            text += " — " + ", ".join(names)
+        self.guests_label.setText(text)
+        self.guests_label.setToolTip(", ".join(names) if names else "")
 
 
 class LinkSettingsDialog(QDialog):

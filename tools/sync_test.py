@@ -162,6 +162,7 @@ def main() -> None:
         def send_param(self, *a): return True
 
     core = AppCore(store, StubLink())
+    core._on_avatar_change("avtr_X")  # establish the avatar before counting
     events: list = []
     core.add_listener(lambda e: events.append(e["t"]))
     params = [("Alpha", "Bool", True), ("Beta", "Float", 0.1)]

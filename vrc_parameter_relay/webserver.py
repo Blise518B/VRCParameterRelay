@@ -36,6 +36,7 @@ class GuestServer:
         self.port: Optional[int] = None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._sockets: Set[web.WebSocketResponse] = set()
+        self._names: dict[web.WebSocketResponse, str] = {}
         self._thread: Optional[threading.Thread] = None
         self.on_guests = lambda n: None
         core.add_listener(self._core_event)
@@ -73,10 +74,18 @@ class GuestServer:
     async def _index(self, request: web.Request) -> web.Response:
         return web.FileResponse(web_root() / "index.html")
 
+    def _public_board(self, board: dict) -> dict:
+        """What guests see: the avatar's name plus the active preset's board."""
+        return {
+            "name": self.core.avatar_name,
+            "categories": board.get("categories", []),
+            "controls": board.get("controls", []),
+        }
+
     def _hello_payload(self) -> dict:
         payload = {
             "t": "hello",
-            "board": _public_board(self.core.board),
+            "board": self._public_board(self.core.board),
             "avatar": self.core.avatar_id,
             "values": self.core.board_values(),
             "yolo": self.core.yolo_enabled,
@@ -101,6 +110,7 @@ class GuestServer:
         # Guests stay connected even while paused — they just see a "paused"
         # overlay and their inputs are ignored server-side until resume.
         self._sockets.add(ws)
+        self._names[ws] = _clean_name(request.query.get("n", ""))
         self._notify_guests()
         await ws.send_json(self._hello_payload())
 
@@ -119,6 +129,10 @@ class GuestServer:
                     data = json.loads(msg.data)
                 except ValueError:
                     continue
+                if data.get("t") == "name":  # guest set/changed their display name
+                    self._names[ws] = _clean_name(data.get("name", ""))
+                    self._notify_guests()
+                    continue
                 if not self.core.sharing_enabled:
                     continue  # paused — ignore guest input, keep the socket open
                 if data.get("t") == "set":
@@ -127,12 +141,14 @@ class GuestServer:
                     self.core.set_param_guest(str(data.get("name")), data.get("value"))
         finally:
             self._sockets.discard(ws)
+            self._names.pop(ws, None)
             self._notify_guests()
         return ws
 
     def _notify_guests(self) -> None:
+        names = [n for n in self._names.values() if n]
         self.on_guests(len(self._sockets))
-        self.core.emit({"t": "guests", "count": len(self._sockets)})
+        self.core.emit({"t": "guests", "count": len(self._sockets), "names": names})
 
     # -- pushing core events to guests ------------------------------------------
 
@@ -158,7 +174,7 @@ class GuestServer:
         elif event["t"] in ("avatar", "board"):
             out = {
                 "t": event["t"],
-                "board": _public_board(event["board"]),
+                "board": self._public_board(event["board"]),
                 "values": event["values"],
             }
             if self.core.yolo_enabled:
@@ -185,13 +201,8 @@ class GuestServer:
                 self._sockets.discard(ws)
 
 
-def _public_board(board: dict) -> dict:
-    """Strip anything guests don't need (currently everything is shareable)."""
-    return {
-        "name": board.get("name"),
-        "categories": board.get("categories", []),
-        "controls": board.get("controls", []),
-    }
+def _clean_name(name: str) -> str:
+    return " ".join(str(name).split())[:24]
 
 
 def _tokens_match(a: str, b: str) -> bool:

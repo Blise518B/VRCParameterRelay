@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from vrc_parameter_relay.core import AppCore
-from vrc_parameter_relay.store import Store
+from vrc_parameter_relay.store import Store, normalize_profile
 
 AVATAR = "avtr_deadbeef-0000-4000-8000-c0ffee000001"
 
@@ -89,12 +89,13 @@ def main() -> None:
     check("cleanup inverted control", core.remove_control(inv["id"]))
 
     # persistence round trip (fresh Store to force re-read from disk)
-    reloaded = Store().load_board(AVATAR)
-    check("categories persisted", len(reloaded["categories"]) == 5)
+    profile = Store().load_profile(AVATAR)
+    active = next(p for p in profile["presets"] if p["id"] == profile["active_preset"])
+    check("categories persisted", len(active["categories"]) == 5)
     check("category names persisted",
-          {c["name"] for c in reloaded["categories"]} >= {"Toggles", "NSFW"})
+          {c["name"] for c in active["categories"]} >= {"Toggles", "NSFW"})
     check("control category persisted",
-          next(c for c in reloaded["controls"] if c["id"] == hoodie["id"])["cat"] == nsfw["id"])
+          next(c for c in active["controls"] if c["id"] == hoodie["id"])["cat"] == nsfw["id"])
 
     # instant-add default kinds
     check("default kind Bool->toggle", core.default_kind("Bool") == "toggle")
@@ -116,14 +117,18 @@ def main() -> None:
           core.board["categories"][0]["id"] == cat_ids0[-1])
     check("move_category no-op on same", core.move_category(cat_ids0[0], cat_ids0[0]) is False)
 
-    # robustness: a board file missing categories gets defaults on load
-    bare = store._board_path("avtr_bare")
+    # migration: a v1.1.0 single-board file becomes a one-preset profile
+    bare = store._profile_path("avtr_bare")
     bare.write_text('{"name": "Old", "controls": [{"id": "x1", "param": "P", '
                     '"ptype": "Bool", "kind": "toggle", "label": "P"}]}', "utf-8")
-    normalized = store.load_board("avtr_bare")
-    check("bare board file gains 4 categories", len(normalized["categories"]) == 4)
+    migrated = store.load_profile("avtr_bare")
+    check("old file gains one Default preset", len(migrated["presets"]) == 1)
+    mp = migrated["presets"][0]
+    check("migrated preset has 4 categories", len(mp["categories"]) == 4)
     check("its controls land in the first category",
-          normalized["controls"][0]["cat"] == normalized["categories"][0]["id"])
+          mp["controls"][0]["cat"] == mp["categories"][0]["id"])
+    check("no stray top-level board keys", "controls" not in migrated
+          and "categories" not in migrated)
 
     # deletion reassigns controls
     check("delete category", core.remove_category(nsfw["id"]))
@@ -133,6 +138,53 @@ def main() -> None:
     check("last category can't be deleted",
           all(not core.remove_category(c["id"]) for c in [core.board["categories"][0]])
           if len(core.board["categories"]) == 1 else True)
+
+    # ---- presets -----------------------------------------------------------
+    base_preset = core.board["id"]
+    core.add_control("Hoodie", "toggle", "Hoodie")  # something to copy
+    stream = core.add_preset("Stream")
+    check("add_preset switches to it", core.board["id"] == stream["id"])
+    check("new preset starts empty", core.board["controls"] == [])
+    check("rename preset", core.rename_preset(stream["id"], "Streaming"))
+    check("switch back", core.switch_preset(base_preset))
+    check("switched", core.board["id"] == base_preset)
+
+    # copy a category (with controls) into the other preset
+    cat0 = core.board["categories"][0]
+    n_ctrls = sum(1 for c in core.board["controls"] if c["cat"] == cat0["id"])
+    check("copy category to preset",
+          core.copy_category_to_preset(cat0["id"], stream["id"]))
+    target = next(p for p in core.profile["presets"] if p["id"] == stream["id"])
+    copied_cat = target["categories"][-1]
+    copied_ctrls = [c for c in target["controls"] if c["cat"] == copied_cat["id"]]
+    check("copied category keeps its name", copied_cat["name"] == cat0["name"])
+    check("controls copied with it", len(copied_ctrls) == n_ctrls)
+    check("copies got fresh ids", copied_cat["id"] != cat0["id"] and
+          all(c["id"] not in {x["id"] for x in core.board["controls"]}
+              for c in copied_ctrls))
+    check("copy to own preset refused",
+          core.copy_category_to_preset(cat0["id"], base_preset) is False)
+    check("delete preset", core.remove_preset(stream["id"]))
+    check("last preset can't be deleted",
+          core.remove_preset(core.board["id"]) is False)
+
+    # ---- offline avatar library ---------------------------------------------
+    core.rename_avatar("My Cool Avatar")
+    check("avatar rename stored", core.avatar_name == "My Cool Avatar")
+    entries = {e["avatar_id"]: e for e in core.list_avatars()}
+    check("named avatar listed", AVATAR in entries and entries[AVATAR]["named"])
+
+    check("live flag set (StubLink path)", core.is_live)
+    other = "avtr_beefcafe-0000-4000-8000-000000000002"
+    core.store.save_profile(normalize_profile({"name": "Other Ava"}, other))
+    check("open other avatar offline", core.open_avatar(other))
+    check("viewing offline", core.avatar_id == other and not core.is_live)
+    link.sent.clear()
+    added = core.add_control("Whatever", "toggle", "W")
+    check("offline board editing works", added is not None)
+    check("offline set sends nothing",
+          core.set_control_value(added["id"], True) is False and link.sent == [])
+    check("back to live avatar", core.open_avatar(AVATAR) and core.is_live)
 
     print("ALL LOGIC TESTS PASSED")
 

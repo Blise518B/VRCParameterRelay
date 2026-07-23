@@ -349,6 +349,7 @@ class CategoryBox(QFrame):
     category_dropped = Signal(str, str)      # dragged_cat_id, target_cat_id
     category_drag_over = Signal(str, str)    # dragged_cat_id, hovered_cat_id
     category_drag_done = Signal()            # drag ended (any outcome)
+    copy_to_preset = Signal(str, str)        # cat_id, target_preset_id
 
     def __init__(self, category: dict[str, Any]) -> None:
         super().__init__()
@@ -359,6 +360,7 @@ class CategoryBox(QFrame):
         self._ghost: Optional[QLabel] = None
         self._ghost_at = -1
         self._ghost_pos: QPoint | None = None
+        self._copy_targets: list[tuple[str, str]] = []  # (preset_id, name)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 10)
@@ -404,6 +406,10 @@ class CategoryBox(QFrame):
         self.hint.setAlignment(Qt.AlignCenter)
         root.addWidget(self.hint)
 
+    def set_copy_targets(self, presets: list[tuple[str, str]]) -> None:
+        """Other presets of this avatar, for the 'Copy to preset' submenu."""
+        self._copy_targets = presets
+
     def add_card(self, card: ControlCard) -> None:
         self.flow.addWidget(card)
 
@@ -419,6 +425,13 @@ class CategoryBox(QFrame):
 
     def _show_menu(self) -> None:
         menu = QMenu(self)
+        if self._copy_targets:
+            copy_menu = menu.addMenu("Copy to preset")
+            for preset_id, name in self._copy_targets:
+                copy_menu.addAction(
+                    name, lambda pid=preset_id:
+                    self.copy_to_preset.emit(self.category["id"], pid))
+            menu.addSeparator()
         menu.addAction("Delete category",
                        lambda: self.delete_requested.emit(self.category["id"]))
         menu.exec(self.mapToGlobal(QPoint(self.width() - 10, 34)))

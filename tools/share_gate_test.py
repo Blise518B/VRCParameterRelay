@@ -109,6 +109,16 @@ def main() -> None:
         ws_first_message(f"http://127.0.0.1:{web.port}/ws?k=wrong"))
     check("bad token still gets 'denied'", bad.get("t") == "denied")
 
+    # guest names reach the host through the guests event
+    guest_events: list = []
+    core.add_listener(lambda e: guest_events.append(e) if e["t"] == "guests" else None)
+    loop.run_until_complete(ws_first_message(url + "&n=Alex"))
+    named = [e for e in guest_events if e.get("names")]
+    check("guest name shows up in guests event",
+          named and named[-1]["names"] == ["Alex"])
+    check("name is gone after disconnect",
+          guest_events[-1]["count"] == 0 and guest_events[-1]["names"] == [])
+
     print("ALL SHARE-GATE TESTS PASSED")
 
 

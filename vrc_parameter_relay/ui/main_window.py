@@ -10,9 +10,10 @@ from typing import Any, Optional
 from PySide6.QtCore import QObject, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QCheckBox, QDialog, QDialogButtonBox, QDockWidget, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton,
-    QScrollArea, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDockWidget, QHBoxLayout,
+    QHeaderView, QInputDialog, QLabel, QLineEdit, QMainWindow, QMenu,
+    QMessageBox, QPushButton, QScrollArea, QTextBrowser, QToolButton,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__
@@ -97,17 +98,42 @@ class MainWindow(QMainWindow):
 
         left = QVBoxLayout()
         left.setSpacing(0)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(2)
         self.board_name = QLineEdit(objectName="BoardName")
-        self.board_name.setPlaceholderText("Board name")
+        self.board_name.setPlaceholderText("Avatar name")
+        self.board_name.setToolTip("Name this avatar — named avatars are kept "
+                                   "for offline editing")
         self.board_name.setMinimumWidth(110)
-        self.board_name.setMaximumWidth(380)
+        self.board_name.setMaximumWidth(300)
         self.board_name.editingFinished.connect(
-            lambda: self.core.rename_board(self.board_name.text()))
+            lambda: self.core.rename_avatar(self.board_name.text()))
+        name_row.addWidget(self.board_name)
+        self.avatar_menu_btn = QToolButton(objectName="AvatarMenu")
+        self.avatar_menu_btn.setText("▾")
+        self.avatar_menu_btn.setToolTip("Open a saved avatar (● = worn in VRChat)")
+        self.avatar_menu_btn.setCursor(Qt.PointingHandCursor)
+        self.avatar_menu_btn.clicked.connect(self._show_avatar_menu)
+        name_row.addWidget(self.avatar_menu_btn)
+        name_row.addStretch(1)
         self.avatar_label = QLabel("waiting for VRChat…", objectName="AvatarId")
         self.avatar_label.setMinimumWidth(60)  # allow clipping instead of forcing width
-        left.addWidget(self.board_name)
+        left.addLayout(name_row)
         left.addWidget(self.avatar_label)
         lay.addLayout(left, 1)
+
+        self.preset_combo = QComboBox(objectName="PresetCombo")
+        self.preset_combo.setToolTip("Preset — a separate board layout for this avatar")
+        self.preset_combo.setMinimumWidth(110)
+        self.preset_combo.setMaximumWidth(160)
+        self.preset_combo.activated.connect(self._preset_chosen)
+        lay.addWidget(self.preset_combo)
+        preset_menu_btn = QToolButton(objectName="CardMenu")
+        preset_menu_btn.setText("⋯")
+        preset_menu_btn.setToolTip("Add, rename or delete presets")
+        preset_menu_btn.setCursor(Qt.PointingHandCursor)
+        preset_menu_btn.clicked.connect(self._show_preset_menu)
+        lay.addWidget(preset_menu_btn)
 
         self.vrc_chip = QLabel("VRChat: searching", objectName="Chip")
         self.guest_chip = QLabel("guests: 0", objectName="Chip")
@@ -134,12 +160,18 @@ class MainWindow(QMainWindow):
         cat_btn.clicked.connect(lambda: self.core.add_category())
         share_btn = QPushButton("Share", objectName="Primary")
         share_btn.clicked.connect(self._open_share)
+        help_btn = QPushButton("?", objectName="HelpBtn")
+        help_btn.setFixedWidth(34)
+        help_btn.setToolTip("Help")
+        help_btn.clicked.connect(lambda: HelpDialog(self).exec())
         lay.addWidget(cat_btn)
         lay.addWidget(share_btn)
+        lay.addWidget(help_btn)
 
         # chips are QLabels that would otherwise stretch to the header's height
         for widget in (self.vrc_chip, self.guest_chip, self.yolo_btn, sync_btn,
-                       cat_btn, share_btn):
+                       cat_btn, share_btn, help_btn, self.preset_combo,
+                       preset_menu_btn):
             widget.setFixedHeight(34)
 
         # full-window header (above the dock too) so its width requirement
@@ -279,8 +311,11 @@ class MainWindow(QMainWindow):
             self.share_dialog.update_tunnel(event)
         elif t == "guests":
             self.guest_count = event["count"]
+            names = event.get("names") or []
             self.guest_chip.setText(f"guests: {self.guest_count}")
-            self.share_dialog.update_guests(self.guest_count)
+            self.guest_chip.setToolTip("Connected: " + ", ".join(names)
+                                       if names else "")
+            self.share_dialog.update_guests(self.guest_count, names)
         elif t == "token":
             self.share_dialog.refresh_state()
         elif t == "sharing":
@@ -313,8 +348,7 @@ class MainWindow(QMainWindow):
 
     def _rebuild_board(self) -> None:
         board = self.core.board
-        self.board_name.setText(board.get("name") or "")
-        self.avatar_label.setText(board.get("avatar_id") or "waiting for VRChat…")
+        self._refresh_avatar_header()
 
         self._cat_ghost = None  # cleared with the layouts below
         for col in self.col_layouts:
@@ -325,12 +359,14 @@ class MainWindow(QMainWindow):
         self.cards.clear()
         self.boxes: dict[str, CategoryBox] = {}
 
-        has_avatar = board.get("avatar_id") is not None
+        has_avatar = self.core.avatar_id is not None
         self.empty_label.setVisible(not has_avatar)
         self.board_scroll.setVisible(has_avatar)
         if not has_avatar:
             return
 
+        other_presets = [(p["id"], p["name"]) for p in self.core.list_presets()
+                         if p["id"] != board.get("id")]
         values = self.core.board_values()
         for i, category in enumerate(board["categories"]):
             box = CategoryBox(category)
@@ -342,6 +378,8 @@ class MainWindow(QMainWindow):
             box.category_dropped.connect(self.core.move_category)
             box.category_drag_over.connect(self._show_cat_ghost)
             box.category_drag_done.connect(self._clear_cat_ghost)
+            box.set_copy_targets(other_presets)
+            box.copy_to_preset.connect(self.core.copy_category_to_preset)
             self.boxes[category["id"]] = box
             for control in board["controls"]:
                 if control.get("cat") != category["id"]:
@@ -358,6 +396,71 @@ class MainWindow(QMainWindow):
         # in single-column mode the empty second column must not eat width
         self.board_cols_layout.setStretch(0, 1)
         self.board_cols_layout.setStretch(1, 1 if self._board_cols == 2 else 0)
+
+    # -- avatar library + presets ---------------------------------------------------
+
+    def _show_avatar_menu(self) -> None:
+        menu = QMenu(self)
+        for entry in self.core.list_avatars():
+            live = entry["avatar_id"] == self.core.live_avatar_id
+            label = ("● " if live else "   ") + entry["name"]
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(entry["avatar_id"] == self.core.avatar_id)
+            action.triggered.connect(
+                lambda _=False, aid=entry["avatar_id"]: self.core.open_avatar(aid))
+        if menu.isEmpty():
+            menu.addAction("No saved avatars yet").setEnabled(False)
+        menu.exec(self.avatar_menu_btn.mapToGlobal(
+            self.avatar_menu_btn.rect().bottomLeft()))
+
+    def _preset_chosen(self, index: int) -> None:
+        preset_id = self.preset_combo.itemData(index)
+        if preset_id:
+            self.core.switch_preset(preset_id)
+
+    def _show_preset_menu(self) -> None:
+        menu = QMenu(self)
+        menu.addAction("＋ New preset", lambda: self.core.add_preset())
+        menu.addAction("Rename preset…", self._rename_preset)
+        menu.addSeparator()
+        menu.addAction("Delete preset", self._delete_preset)
+        menu.exec(self.cursor().pos())
+
+    def _rename_preset(self) -> None:
+        current = self.core.board
+        name, ok = QInputDialog.getText(self, "Rename preset", "Preset name:",
+                                        text=current.get("name", ""))
+        if ok and name.strip():
+            self.core.rename_preset(current["id"], name.strip())
+
+    def _delete_preset(self) -> None:
+        current = self.core.board
+        if len(self.core.list_presets()) <= 1:
+            QMessageBox.information(self, "Can't delete",
+                                    "The avatar needs at least one preset.")
+            return
+        answer = QMessageBox.question(
+            self, "Delete preset",
+            f"Delete preset “{current.get('name')}” and everything on it?")
+        if answer == QMessageBox.Yes:
+            self.core.remove_preset(current["id"])
+
+    def _refresh_avatar_header(self) -> None:
+        self.board_name.setText(self.core.avatar_name)
+        live = self.core.is_live
+        dot = '<span style="color:#31f272">●</span> ' if live else ""
+        suffix = "" if live else "  (offline)" if self.core.avatar_id else ""
+        self.avatar_label.setText(
+            f'{dot}{self.core.avatar_id or "waiting for VRChat…"}{suffix}')
+        self.preset_combo.blockSignals(True)
+        self.preset_combo.clear()
+        for preset in self.core.list_presets():
+            self.preset_combo.addItem(preset["name"], preset["id"])
+        idx = self.preset_combo.findData(self.core.board.get("id"))
+        if idx >= 0:
+            self.preset_combo.setCurrentIndex(idx)
+        self.preset_combo.blockSignals(False)
 
     # -- category drag ghost (half-transparent landing preview) --------------------
 
@@ -531,6 +634,64 @@ class MainWindow(QMainWindow):
                 widget.blockSignals(False)
                 return
         self.core.set_yolo(on)
+
+
+HELP_HTML = f"""
+<h2 style="margin-top:0">Getting started</h2>
+<p>Start VRChat with OSC enabled (<i>Action Menu → Options → OSC</i>). The app
+finds it automatically and lists every parameter of your avatar in the right
+panel (open/close with the green pull-tab). <b>Double-click</b> a parameter or
+<b>drag it onto a category</b> to make a control — the type is picked
+automatically, and you can fine-tune it via the card's ⋯ → Edit (label,
+range, invert ⇄ for backwards logic).</p>
+
+<h2>Boards, categories &amp; presets</h2>
+<p>Controls live in categories. Drag cards by their ⠿ grip to rearrange or
+move them; drag a whole category by the grip in its header. The 🔒 on a
+category blocks <i>guests</i> from using it (you still can). Each avatar can
+have several <b>presets</b> (separate board layouts) — switch with the
+dropdown in the header, manage with the ⋯ next to it, and copy a category to
+another preset via the category's ⋯ menu.</p>
+
+<h2>Avatar library</h2>
+<p>Give an avatar a name (the big field top-left) and it's kept for offline
+editing: click ▾ to open any saved avatar without VRChat running. The green
+● marks the avatar you're actually wearing; controls only send to VRChat
+when you're viewing the worn avatar.</p>
+
+<h2>Sharing</h2>
+<p><b>Share → Start sharing</b> creates a public link (no port forwarding —
+a Cloudflare quick tunnel; downloads itself on first use). Guests see only
+your board and can set a display name so you know who's connected.
+<b>Pause</b> blocks guests without disconnecting them; <b>Reset link</b>
+invalidates every link you've handed out. For a link that survives app
+restarts, set up a free ngrok static domain in <i>Link settings</i>.</p>
+
+<h2>⚡ YOLO mode</h2>
+<p>The header toggle gives guests the <i>full</i> parameter list and control
+over everything, ignoring category locks (values stay clamped to safe
+ranges). It stays on until you turn it off.</p>
+
+<h2>Data &amp; updates</h2>
+<p>Boards and settings live in <code>%APPDATA%\\VRCParameterRelay</code>.
+On startup the app checks GitHub for a newer release and offers a download
+link — never installs anything by itself.</p>
+"""
+
+
+class HelpDialog(QDialog):
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"{APP_NAME} — Help")
+        self.resize(560, 520)
+        lay = QVBoxLayout(self)
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setHtml(HELP_HTML)
+        lay.addWidget(browser)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        lay.addWidget(close, alignment=Qt.AlignRight)
 
 
 class UpdateDialog(QDialog):

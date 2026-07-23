@@ -19,9 +19,12 @@ let yoloFilter = "";
 const cards = new Map();     // control id -> updater fn
 const paramRows = new Map(); // param name -> updater fn (YOLO list)
 
+let guestName = localStorage.getItem("vrcpr_name") || "";
+
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws?k=${encodeURIComponent(token)}`);
+  ws = new WebSocket(`${proto}://${location.host}/ws?k=${encodeURIComponent(token)}`
+    + `&n=${encodeURIComponent(guestName)}`);
 
   ws.onopen = () => { retryMs = 1000; setStatus(true, "connected"); };
 
@@ -408,6 +411,20 @@ function fmt(v) {
   const x = Number(v);
   return Number.isFinite(x) ? x.toFixed(2) : "–";
 }
+
+function askName() {
+  const entered = prompt("Your name (shown to the host):", guestName);
+  if (entered === null) return;
+  guestName = entered.trim().slice(0, 24);
+  localStorage.setItem("vrcpr_name", guestName);
+  document.getElementById("nameBtn").textContent = guestName ? `✎ ${guestName}` : "✎ set name";
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ t: "name", name: guestName }));
+  }
+}
+
+document.getElementById("nameBtn").onclick = askName;
+document.getElementById("nameBtn").textContent = guestName ? `✎ ${guestName}` : "✎ set name";
 
 if (!token) {
   showOverlay("Missing access token — ask the host for a fresh link.");

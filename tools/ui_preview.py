@@ -52,6 +52,10 @@ def seed(core) -> None:
     core.add_control("Brightness", "slider", "Brightness", 0, 1, category=cats[2]["id"])
     core.add_control("OutfitIndex", "int", "Outfit", 0, 5, category=cats[2]["id"])
     core.set_category_locked(cats[1]["id"], True)
+    core.rename_avatar("Demo Avatar")
+    base = core.board["id"]
+    core.add_preset("Alt layout")
+    core.switch_preset(base)
 
 
 def main() -> int:

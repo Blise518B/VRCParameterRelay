@@ -111,10 +111,11 @@ def main() -> None:
     print("OK   unlock restores guest control")
 
     # Category persistence round trip
-    reloaded = store.load_board(FAKE_AVATAR)
-    assert len(reloaded["categories"]) == 5
-    assert any(c["name"] == "NSFW" for c in reloaded["categories"])
-    hoodie_ctrl = next(c for c in reloaded["controls"] if c["id"] == hoodie["id"])
+    profile = store.load_profile(FAKE_AVATAR)
+    active = next(p for p in profile["presets"] if p["id"] == profile["active_preset"])
+    assert len(active["categories"]) == 5
+    assert any(c["name"] == "NSFW" for c in active["categories"])
+    hoodie_ctrl = next(c for c in active["controls"] if c["id"] == hoodie["id"])
     assert hoodie_ctrl["cat"] == nsfw["id"]
     print("OK   categories persisted")
 
