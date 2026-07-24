@@ -1,0 +1,93 @@
+# .github/workflows/build.yml
+name: Build Pyinstaller Binaries
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # ← opt into Node 24 now
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact-name: VRCParameterRelay
+            output-ext: "AppImage"
+          - os: windows-latest
+            artifact-name: VRCParameterRelay
+            output-ext: "exe"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout main repo
+        uses: actions/checkout@v4
+
+      # --- Python +  CX_Freeze ---
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install wget -y
+          wget https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # --- Build ---
+      - name: Build with pyinstaller (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          pyinstaller --noconfirm VRCParameterRelay.spec
+
+      - name: Build with pyinstaller (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          RELEASEVERSION="${GITHUB_REF#refs/tags/}"
+          APPNAME=${GITHUB_REPOSITORY#*\/}
+          ARCH=$(uname -m)
+          UPDATEURL="gh-releases-zsync|${GITHUB_REPOSITORY////|}|latest|$APPNAME-*$ARCH.AppImage.zsync"
+          pyinstaller --noconfirm VRCParameterRelay.spec
+          cp vrc_parameter_relay/appimage/AppRun dist/
+          cp vrc_parameter_relay/assets/icon.png dist/VRCParameterRelay.png
+          cat vrc_parameter_relay/appimage/AppImage-template.desktop | sed "s/APPIMAGENAME/$APPNAME/" | sed "s/APPIMAGEVERSION/$RELEASEVERSION/" | sed "s/APPIMAGEARCH/$ARCH/" > dist/$APPNAME.desktop
+          ./appimagetool-x86_64.AppImage -u $UPDATEURL dist/ dist/$APPNAME-$RELEASEVERSION-$ARCH.AppImage
+          cp $APPNAME-$RELEASEVERSION-$ARCH.AppImage.zsync dist/
+
+      # --- Upload ---
+      - name: Upload binary
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: |
+                dist/${{ matrix.artifact-name }}*${{ matrix.output-ext }}
+                dist/${{ matrix.artifact-name }}
+          retention-days: 30
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v3
+        with:
+          working_directory: dist
+          files: |
+            ${{ matrix.artifact-name }}
+            ${{ matrix.artifact-name }}*${{ matrix.output-ext }}
+            ${{ matrix.artifact-name }}*${{ matrix.output-ext }}.zsync
