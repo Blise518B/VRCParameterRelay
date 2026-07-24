@@ -14,6 +14,7 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false   # let the other OS finish even if one leg fails
       matrix:
         include:
           - os: ubuntu-latest
@@ -62,7 +63,9 @@ jobs:
       - name: Build with pyinstaller (Linux)
         if: runner.os == 'Linux'
         run: |
-          RELEASEVERSION="${GITHUB_REF#refs/tags/}"
+          # release: the tag (v1.3.1). manual run: the branch (main) — the
+          # bare ref would leave slashes that break the sed below.
+          RELEASEVERSION="${GITHUB_REF##*/}"
           APPNAME=${GITHUB_REPOSITORY#*\/}
           ARCH=$(uname -m)
           UPDATEURL="gh-releases-zsync|${GITHUB_REPOSITORY////|}|latest|$APPNAME-*$ARCH.AppImage.zsync"
