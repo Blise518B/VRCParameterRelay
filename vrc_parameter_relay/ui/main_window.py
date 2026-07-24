@@ -827,7 +827,8 @@ editing, and nothing is sent to VRChat.</p>
 <h2>Sharing</h2>
 <p><b>Share → Start sharing</b> creates a public link (no port forwarding —
 a Cloudflare quick tunnel; downloads itself on first use). Guests see only
-your board and can set a display name so you know who's connected — click
+your board — in the same theme and category colours you're using — and can
+set a display name so you know who's connected — click
 the <b>guests</b> chip to see the list (unnamed guests show as
 <i>Anonymous&nbsp;#N</i>). The red <b>STOP</b> button above the board is an
 emergency stop: it pauses everyone instantly without disconnecting them,
