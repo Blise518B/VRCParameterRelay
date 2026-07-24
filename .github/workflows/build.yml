@@ -29,7 +29,7 @@ jobs:
       - name: Checkout main repo
         uses: actions/checkout@v4
 
-      # --- Python +  CX_Freeze ---
+      # --- Python ---
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -67,6 +67,9 @@ jobs:
           ARCH=$(uname -m)
           UPDATEURL="gh-releases-zsync|${GITHUB_REPOSITORY////|}|latest|$APPNAME-*$ARCH.AppImage.zsync"
           pyinstaller --noconfirm VRCParameterRelay.spec
+          # the spec version-stamps the binary (VRCParameterRelay-X.Y.Z) but
+          # AppRun and the .desktop entry expect the plain name
+          mv dist/$APPNAME-* dist/$APPNAME
           cp vrc_parameter_relay/appimage/AppRun dist/
           cp vrc_parameter_relay/assets/icon.png dist/VRCParameterRelay.png
           cat vrc_parameter_relay/appimage/AppImage-template.desktop | sed "s/APPIMAGENAME/$APPNAME/" | sed "s/APPIMAGEVERSION/$RELEASEVERSION/" | sed "s/APPIMAGEARCH/$ARCH/" > dist/$APPNAME.desktop
@@ -84,6 +87,7 @@ jobs:
           retention-days: 30
 
       - name: Upload to Release
+        if: github.event_name == 'release'   # manual test runs only build artifacts
         uses: softprops/action-gh-release@v3
         with:
           working_directory: dist

@@ -14,3 +14,4 @@ data/
 # Editors
 .vscode/
 .idea/
+.venv-py310/
