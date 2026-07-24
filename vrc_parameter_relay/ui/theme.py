@@ -72,6 +72,7 @@ QFrame#Category[catcolor="{key}"] QLabel#CatGrip {{ color: {vib}; }}
 QFrame#Category[catcolor="{key}"] QFrame#Card {{ border: 1px solid {mid}; }}
 QFrame#Category[catcolor="{key}"] QLabel#CardGrip {{ color: {vib}; }}
 QFrame#Category[catcolor="{key}"] QToolButton#CardMenu {{ color: {vib}; }}
+QFrame#Category[catcolor="{key}"] QSpinBox {{ border: 1px solid {mid}; }}
 QFrame#Category[catcolor="{key}"] QLabel#CatHint {{ border: 1px dashed {mid}; }}
 """)
     return "".join(out)
@@ -99,6 +100,7 @@ QFrame#Category[catcolor="{key}"] QLineEdit#CatName:focus {{ background: {focus}
 QFrame#Category[catcolor="{key}"] QFrame#Card {{ border: 1px solid {border}; }}
 QFrame#Category[catcolor="{key}"] QLabel#CardGrip {{ color: {vib}; }}
 QFrame#Category[catcolor="{key}"] QToolButton#CardMenu {{ color: {vib}; }}
+QFrame#Category[catcolor="{key}"] QSpinBox {{ border: 1px solid {border}; }}
 QFrame#Category[catcolor="{key}"] QLabel#CatHint {{ border: 1px dashed {border}; }}
 """)
     return "".join(out)

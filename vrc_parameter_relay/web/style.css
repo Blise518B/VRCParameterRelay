@@ -313,6 +313,8 @@ input[type="range"] {
   cursor: pointer;
 }
 .stepper .num { flex: 1; text-align: center; font-weight: 650; font-variant-numeric: tabular-nums; }
+/* int stepper buttons follow the category colour, like the cards */
+.category .stepper button { border-color: var(--cat-border, var(--card-edge)); }
 
 .empty {
   color: var(--muted);
