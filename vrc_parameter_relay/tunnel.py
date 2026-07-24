@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import stat
 import subprocess
 import sys
 import threading
@@ -27,10 +28,23 @@ from typing import Callable, Optional
 
 log = logging.getLogger(__name__)
 
-CLOUDFLARED_URL = (
-    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
-)
-NGROK_ZIP_URL = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
+if sys.platform == "win32":
+    CLOUDFLARED_URL = (
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+    )
+    CLOUDFLARED_BINARY="cloudflared.exe"
+    NGROK_ZIP_URL = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
+    NGROK_BINARY="ngrok.exe"
+
+
+if sys.platform == "linux":
+    CLOUDFLARED_URL = (
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+    )
+    CLOUDFLARED_BINARY="cloudflared"
+    NGROK_ZIP_URL = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.zip"
+    NGROK_BINARY="ngrok"
+
 TRYCLOUDFLARE_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
 
@@ -93,7 +107,7 @@ class Tunnel:
         self.on_change(self.status())
 
     def _exe_path(self, provider: str) -> Path:
-        return self.bin_dir / ("ngrok.exe" if provider == "ngrok" else "cloudflared.exe")
+        return self.bin_dir / (NGROK_BINARY if provider == "ngrok" else CLOUDFLARED_BINARY)
 
     def _start_impl(self, local_port: int) -> None:
         provider = self.provider()
@@ -109,6 +123,9 @@ class Tunnel:
                 self._download(provider, exe)
             self._set("starting")
             self._err_hint = None
+            if sys.platform == "linux":
+                getfileperms = os.stat(exe)
+                os.chmod(exe, getfileperms.st_mode | stat.S_IEXEC)
             if provider == "ngrok":
                 self._spawn_ngrok(exe, local_port, token, domain)
             else:
@@ -126,7 +143,7 @@ class Tunnel:
             tmp = exe.with_suffix(".zip")
             self._fetch(NGROK_ZIP_URL, tmp)
             with zipfile.ZipFile(tmp) as zf:
-                with zf.open("ngrok.exe") as src, open(exe, "wb") as dst:
+                with zf.open(NGROK_BINARY) as src, open(exe, "wb") as dst:
                     dst.write(src.read())
             tmp.unlink(missing_ok=True)
         else:
