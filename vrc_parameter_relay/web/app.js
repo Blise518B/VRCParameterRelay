@@ -48,12 +48,16 @@ function connect() {
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
     switch (msg.t) {
+      case "style":
+        applyStyle(msg);
+        break;
       case "hello":
       case "resumed":
       case "avatar":
       case "board":
         board = msg.board;
         values = msg.values || {};
+        if (msg.style) applyStyle(msg.style);
         if (msg.t === "hello" || msg.t === "resumed") {
           yoloOn = !!msg.yolo;
           setPaused(!!msg.paused);
@@ -99,6 +103,15 @@ function connect() {
     setTimeout(connect, retryMs);
     retryMs = Math.min(retryMs * 1.6, 15000);
   };
+}
+
+// mirror the host's theme + font (CSS handles the rest via variables)
+function applyStyle(style) {
+  if (!style) return;
+  document.body.dataset.theme = style.theme || "neon";
+  if (style.font) {
+    document.documentElement.style.setProperty("--ui-font", '"' + style.font + '"');
+  }
 }
 
 function setPaused(on) {
@@ -168,6 +181,7 @@ function render() {
 
     const section = document.createElement("section");
     section.className = "category" + (cat.locked ? " locked" : "");
+    section.dataset.color = cat.color || "green";  // tints border/header/cards
 
     const header = document.createElement("div");
     header.className = "cat-header";

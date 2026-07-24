@@ -762,6 +762,7 @@ class MainWindow(QMainWindow):
         if app is not None:
             app.setStyleSheet(build_qss(theme, font))  # re-polishes every widget live
         self._refresh_avatar_header()  # the live dot uses the theme accent inline
+        self.core.emit({"t": "style"})  # guests follow the host's look
 
     def _set_theme(self, key: str) -> None:
         if key == self.core.store.settings.get("theme"):

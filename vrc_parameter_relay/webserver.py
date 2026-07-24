@@ -29,6 +29,11 @@ def web_root() -> Path:
     return resource_path("web")
 
 
+def font_root() -> Path:
+    """Bundled .ttf files, served so guests get the host's font too."""
+    return resource_path("assets/fonts")
+
+
 class GuestServer:
     def __init__(self, core, port: int) -> None:
         self.core = core
@@ -59,6 +64,9 @@ class GuestServer:
         app.router.add_get("/favicon.ico",
                            lambda r: web.FileResponse(web_root() / "favicon.png"))
         app.router.add_static("/static/", web_root(), show_index=False)
+        fonts = font_root()
+        if fonts.is_dir():
+            app.router.add_static("/fonts/", fonts, show_index=False)
         runner = web.AppRunner(app, access_log=None)
         self.loop.run_until_complete(runner.setup())
         try:
@@ -84,6 +92,12 @@ class GuestServer:
             "controls": board.get("controls", []),
         }
 
+    def _style(self) -> dict:
+        """The host's chosen look, so the guest page can match it."""
+        settings = self.core.store.settings
+        return {"theme": settings.get("theme") or "neon",
+                "font": settings.get("font") or "Segoe UI"}
+
     def _hello_payload(self) -> dict:
         payload = {
             "t": "hello",
@@ -92,6 +106,7 @@ class GuestServer:
             "values": self.core.board_values(),
             "yolo": self.core.yolo_enabled,
             "paused": not self.core.sharing_enabled,
+            "style": self._style(),
         }
         if self.core.yolo_enabled:
             payload["params"] = self.core.param_snapshot()
@@ -192,6 +207,8 @@ class GuestServer:
             out = {"t": "yolo", "enabled": event["enabled"]}
             if event["enabled"]:
                 out["params"] = self.core.param_snapshot()
+        elif event["t"] == "style":  # host switched theme/font — follow along
+            out = {"t": "style", **self._style()}
         if out:
             self.loop.call_soon_threadsafe(self._schedule, out, False)
 
