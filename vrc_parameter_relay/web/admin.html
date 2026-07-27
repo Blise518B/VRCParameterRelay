@@ -11,46 +11,74 @@
 </head>
 <body>
 
-<header class="admin-head">
-  <div class="brand">
-    <span class="dot" id="statusDot"></span>
-    <input id="avatarName" class="avatar-name" placeholder="Avatar name" autocomplete="off">
-    <select id="avatarPick" class="pick" title="Open a saved avatar"></select>
-    <span id="liveBadge" class="badge"></span>
+<!-- header: mirrors the desktop window's top bar -->
+<header id="head">
+  <div class="head-left">
+    <div class="name-row">
+      <input id="avatarName" class="board-name" placeholder="Avatar name" autocomplete="off"
+             title="Name this avatar — named avatars are kept for offline editing">
+      <button id="avatarMenu" class="avatar-menu" title="Open a saved avatar (● = worn in VRChat)">▾</button>
+      <span id="liveBadge" class="live-badge"></span>
+    </div>
+    <div id="avatarId" class="avatar-id">waiting for VRChat…</div>
   </div>
   <div class="head-right">
-    <select id="presetPick" class="pick" title="Preset"></select>
-    <button id="presetAdd" class="mini" title="New preset">+</button>
-    <button id="presetRename" class="mini" title="Rename preset">✎</button>
-    <button id="presetDel" class="mini danger" title="Delete preset">🗑</button>
-    <span class="sep"></span>
-    <span id="guestChip" class="chip">guests: 0</span>
-    <button id="yoloBtn" class="chip yolo">⚡ YOLO</button>
-    <button id="shareBtn" class="chip">sharing</button>
+    <select id="presetPick" class="preset-combo" title="Preset — a separate board layout for this avatar"></select>
+    <button id="presetMenu" class="icon-btn" title="Add, rename or delete presets">⋯</button>
+    <span id="vrcChip" class="chip">VRChat: —</span>
+    <button id="guestChip" class="chip-btn" title="Click to see who's connected">guests: 0</button>
+    <button id="helpBtn" class="btn help" title="Help">?</button>
   </div>
 </header>
-<div class="sub" id="statusText">connecting…</div>
 
-<main class="admin-body">
-  <section class="board-col">
-    <div class="toolbar">
-      <button id="addCategory" class="mini">+ Category</button>
-      <span class="hint">changes are saved instantly</span>
+<div id="body">
+  <main class="left">
+    <div class="board-toolbar">
+      <button id="addCategory" class="btn">＋ Category</button>
+      <button id="yoloBtn" class="btn yolo" title="YOLO mode: guests get every parameter, ignoring locks">⚡ YOLO</button>
+      <button id="stopBtn" class="btn stop">■ STOP</button>
     </div>
-    <div id="cats"></div>
-  </section>
+    <div id="board" class="board-area"><div class="col"></div><div class="col"></div></div>
+  </main>
 
-  <aside class="param-col">
-    <div class="param-head">
-      <strong>Avatar parameters</strong>
-      <span class="hint" id="paramCount"></span>
+  <button id="dockToggle" class="dock-toggle" title="Show/hide the avatar parameters panel">&gt;</button>
+
+  <aside id="dock" class="dock">
+    <div class="dock-title">
+      <span class="dock-title-text">Avatar parameters</span>
+      <button id="resyncBtn" class="btn small">⟳ Resync</button>
     </div>
-    <input id="paramFilter" type="search" class="filter" placeholder="Filter parameters…">
-    <div id="params" class="param-list"></div>
-    <div class="hint pad">Click a parameter to add it to the first category,
-      or pick a target with the ▾.</div>
+    <div class="dock-inner">
+      <input id="paramFilter" type="search" class="filter" placeholder="Filter parameters…">
+      <div class="ptable">
+        <div class="phead"><span>Parameter</span><span>Type</span><span>Value</span></div>
+        <div id="params" class="pbody"></div>
+      </div>
+      <div class="dock-hint">Double-click or drag the parameters into a group.</div>
+      <div class="dock-hint dim">Values update live from VRChat.</div>
+    </div>
   </aside>
-</main>
+</div>
+
+<footer id="statusBar">
+  <span id="statusText">connecting…</span>
+  <span class="grow"></span>
+  <span class="credit">VRC Parameter Relay — admin panel</span>
+</footer>
+
+<!-- floating menus + modal, mirroring the desktop's popup menus -->
+<div id="menu" class="popup hidden"></div>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-title" id="modalTitle">Edit control</div>
+    <div id="modalBody"></div>
+    <div class="modal-btns">
+      <button id="modalCancel" class="btn">Cancel</button>
+      <button id="modalOk" class="btn primary">OK</button>
+    </div>
+  </div>
+</div>
 
 <div id="overlay" class="overlay hidden"><div class="overlay-card" id="overlayText"></div></div>
 <div id="toast" class="toast"></div>

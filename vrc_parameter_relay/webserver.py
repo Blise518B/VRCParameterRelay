@@ -246,6 +246,8 @@ class GuestServer:
             "sharing": core.sharing_enabled,
             "yolo": core.yolo_enabled,
             "guests": len(self._sockets),
+            "guest_names": [n or f"Anonymous #{self._ids.get(w, 0)}"
+                            for w, n in self._names.items()],
             "colors": list(CATEGORY_COLORS),
             "style": self._style(),
         }
@@ -289,8 +291,10 @@ class GuestServer:
         elif op == "add_control":
             ptype = (core.param_snapshot().get(str(arg("param")))
                      or {}).get("ptype", "Float")
+            index = arg("index")
             core.add_control(str(arg("param")), arg("kind") or core.default_kind(ptype),
-                             category=arg("cat"))
+                             category=arg("cat"),
+                             index=int(index) if index is not None else None)
         elif op == "update_control":
             changes = {k: v for k, v in (data.get("changes") or {}).items()
                        if k in ("label", "kind", "min", "max", "invert")}
@@ -332,6 +336,10 @@ class GuestServer:
             core.set_sharing(bool(arg("enabled")))
         elif op == "set_yolo":
             core.set_yolo(bool(arg("enabled")))
+        elif op == "resync":
+            refetch = getattr(core.link, "refetch", None)
+            if callable(refetch):
+                refetch()
         elif op == "reset_guest_link":
             core.regenerate_token()
         else:
