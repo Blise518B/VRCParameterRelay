@@ -105,6 +105,10 @@ class HeadlessApp:
         if ip:  # how a server/Linux user reaches the board from another device
             log.info("on this network:  http://%s:%d/?k=%s",
                      ip, self.web.port, self.core.guest_token())
+        if self.store.settings.get("admin_enabled", True):
+            log.info("ADMIN PANEL:    http://127.0.0.1:%d/admin?k=%s   "
+                     "(full control — do not share)",
+                     self.web.port, self.core.admin_token())
         if self.core.yolo_enabled:
             log.warning("YOLO mode is ON (persisted setting) — guests control "
                         "every parameter")

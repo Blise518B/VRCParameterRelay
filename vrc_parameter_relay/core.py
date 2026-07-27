@@ -575,3 +575,12 @@ class AppCore:
         token = self.store.regenerate_guest_token()
         self.emit({"t": "token", "token": token})
         return token
+
+    def admin_token(self) -> str:
+        return self.store.settings["admin_token"]
+
+    def regenerate_admin_token(self) -> str:
+        """Invalidates every admin link that has been handed out."""
+        token = self.store.regenerate_admin_token()
+        self.emit({"t": "admin_token", "token": token})
+        return token

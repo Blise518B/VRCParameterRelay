@@ -1,0 +1,135 @@
+/* Admin panel — builds on style.css (same theme variables and fonts). */
+
+.admin-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  padding: 14px 18px 8px; position: sticky; top: 0; z-index: 5;
+  background: linear-gradient(var(--bg) 80%, transparent);
+}
+.head-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sub { padding: 0 18px; }
+
+.avatar-name {
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  color: var(--accent); font: inherit; font-size: 19px; font-weight: 700;
+  padding: 3px 6px; min-width: 120px; max-width: 260px;
+}
+.avatar-name:hover { border-color: var(--card-edge); }
+.avatar-name:focus { border-color: var(--accent); outline: none; }
+
+.badge {
+  border: 1px solid var(--card-edge); border-radius: 10px;
+  padding: 1px 9px; font-size: 11px; font-weight: 700; white-space: nowrap;
+}
+.badge.live { color: var(--accent); border-color: var(--accent); }
+.badge.offline { color: #ff5561; border-color: #a52a38; }
+
+.pick, .mini, .chip {
+  background: var(--card); color: var(--text); font: inherit; font-size: 12px;
+  border: 1px solid var(--card-edge); border-radius: 8px;
+  padding: 5px 9px; cursor: pointer;
+}
+.pick { max-width: 190px; }
+.mini { min-width: 30px; }
+.mini:hover, .chip:hover, .pick:hover { border-color: var(--accent); color: var(--accent); }
+.mini.danger:hover { border-color: #ff5561; color: #ff5561; }
+.chip.on { color: var(--accent); border-color: var(--accent); }
+.chip.yolo.on { color: #ffb454; border-color: #ffb454; }
+.sep { width: 1px; height: 20px; background: var(--card-edge); margin: 0 4px; }
+
+.admin-body {
+  display: flex; align-items: flex-start; gap: 16px;
+  padding: 10px 18px 60px; max-width: 1500px; margin: 0 auto;
+}
+.board-col { flex: 1 1 62%; min-width: 0; }
+.param-col {
+  flex: 0 0 330px; position: sticky; top: 92px;
+  border: 1px solid var(--card-edge); border-radius: 10px;
+  background: var(--card); padding: 10px; max-height: 78vh;
+  display: flex; flex-direction: column;
+}
+@media (max-width: 900px) {
+  .admin-body { flex-direction: column; }
+  .param-col { flex: 1 1 auto; width: 100%; position: static; max-height: none; }
+}
+
+.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.hint { color: var(--muted); font-size: 11.5px; }
+.hint.pad { padding: 8px 2px 0; }
+
+/* categories ------------------------------------------------------------ */
+.acat {
+  border: 1px solid var(--cat-border, var(--card-edge));
+  background: var(--cat-bg); border-radius: 10px;
+  padding: 8px; margin-bottom: 12px;
+}
+.acat-head {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--cat-bar, #1c8a3d); color: var(--cat-title, var(--text));
+  border-radius: 7px; padding: 6px 8px; margin-bottom: 8px;
+}
+.acat-head input {
+  flex: 1; min-width: 0; background: transparent; border: 1px solid transparent;
+  color: inherit; font: inherit; font-weight: 700; font-size: 14px;
+  padding: 2px 5px; border-radius: 5px;
+}
+.acat-head input:hover { border-color: rgba(255,255,255,.25); }
+.acat-head input:focus { border-color: currentColor; outline: none; }
+.acat-head .mini { background: rgba(0,0,0,.25); color: inherit; border-color: transparent; }
+.acat-head .mini:hover { border-color: currentColor; }
+.swatches { display: flex; gap: 3px; }
+.sw { width: 15px; height: 15px; border-radius: 4px; border: 1px solid #0006; cursor: pointer; }
+.sw.sel { outline: 2px solid #fff8; }
+
+.ctrl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 8px; }
+.actrl {
+  border: 1px solid var(--cat-border, var(--card-edge));
+  background: var(--bg); border-radius: 8px; padding: 8px 9px;
+}
+.actrl-top { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.actrl-top .lbl {
+  flex: 1; min-width: 0; background: transparent; border: 1px solid transparent;
+  color: var(--text); font: inherit; font-weight: 600; font-size: 13px;
+  padding: 2px 4px; border-radius: 5px;
+}
+.actrl-top .lbl:hover { border-color: var(--card-edge); }
+.actrl-top .lbl:focus { border-color: var(--accent); outline: none; }
+.actrl .param { color: var(--muted); font-size: 10.5px; margin-bottom: 6px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.actrl-row { display: flex; align-items: center; gap: 6px; }
+.actrl-row select, .actrl-row input[type="number"] {
+  background: var(--input-bg); color: var(--text); font: inherit; font-size: 11.5px;
+  border: 1px solid var(--card-edge); border-radius: 6px; padding: 3px 5px;
+}
+.actrl-row input[type="number"] { width: 62px; }
+.actrl .live { margin-top: 7px; }
+.empty-cat { color: var(--muted); font-size: 12px; padding: 12px;
+  border: 1px dashed var(--card-edge); border-radius: 8px; text-align: center; }
+
+/* parameter list --------------------------------------------------------- */
+.param-head { display: flex; justify-content: space-between; align-items: baseline; }
+.filter {
+  width: 100%; margin: 8px 0; background: var(--input-bg); color: var(--text);
+  border: 1px solid var(--card-edge); border-radius: 7px; padding: 6px 9px; font: inherit;
+}
+.param-list { overflow-y: auto; flex: 1; }
+.prow2 {
+  display: flex; align-items: center; gap: 6px; padding: 4px 6px;
+  border-radius: 6px; font-size: 12.5px;
+}
+.prow2:hover { background: var(--card); }
+.prow2 .pn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; cursor: pointer; }
+.prow2 .pt { color: var(--muted); font-size: 10.5px; }
+.prow2 .pv { color: var(--muted); font-size: 10.5px; width: 42px; text-align: right; }
+.prow2 select { background: var(--input-bg); color: var(--muted); border: 1px solid var(--card-edge);
+  border-radius: 5px; font-size: 10.5px; padding: 1px 2px; }
+.prow2.used .pn { color: var(--accent); }
+
+.toast {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  background: var(--card); border: 1px solid #ff5561; color: #ff5561;
+  padding: 8px 14px; border-radius: 8px; font-size: 13px;
+  opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 60;
+}
+.toast.show { opacity: 1; }

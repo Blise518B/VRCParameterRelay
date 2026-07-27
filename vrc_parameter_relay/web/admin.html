@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Admin — VRC Parameter Relay</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+
+<header class="admin-head">
+  <div class="brand">
+    <span class="dot" id="statusDot"></span>
+    <input id="avatarName" class="avatar-name" placeholder="Avatar name" autocomplete="off">
+    <select id="avatarPick" class="pick" title="Open a saved avatar"></select>
+    <span id="liveBadge" class="badge"></span>
+  </div>
+  <div class="head-right">
+    <select id="presetPick" class="pick" title="Preset"></select>
+    <button id="presetAdd" class="mini" title="New preset">+</button>
+    <button id="presetRename" class="mini" title="Rename preset">✎</button>
+    <button id="presetDel" class="mini danger" title="Delete preset">🗑</button>
+    <span class="sep"></span>
+    <span id="guestChip" class="chip">guests: 0</span>
+    <button id="yoloBtn" class="chip yolo">⚡ YOLO</button>
+    <button id="shareBtn" class="chip">sharing</button>
+  </div>
+</header>
+<div class="sub" id="statusText">connecting…</div>
+
+<main class="admin-body">
+  <section class="board-col">
+    <div class="toolbar">
+      <button id="addCategory" class="mini">+ Category</button>
+      <span class="hint">changes are saved instantly</span>
+    </div>
+    <div id="cats"></div>
+  </section>
+
+  <aside class="param-col">
+    <div class="param-head">
+      <strong>Avatar parameters</strong>
+      <span class="hint" id="paramCount"></span>
+    </div>
+    <input id="paramFilter" type="search" class="filter" placeholder="Filter parameters…">
+    <div id="params" class="param-list"></div>
+    <div class="hint pad">Click a parameter to add it to the first category,
+      or pick a target with the ▾.</div>
+  </aside>
+</main>
+
+<div id="overlay" class="overlay hidden"><div class="overlay-card" id="overlayText"></div></div>
+<div id="toast" class="toast"></div>
+
+<script src="/static/admin.js"></script>
+</body>
+</html>

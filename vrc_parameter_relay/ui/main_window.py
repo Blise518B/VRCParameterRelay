@@ -952,6 +952,15 @@ clamped to safe ranges). It stays on until you turn it off.</p>
 live typeface picker (each row is shown in its own font). Changes apply
 instantly and are remembered.</p>
 
+<h2>Admin panel (edit from a browser)</h2>
+<p><b>Share → Admin panel</b> gives you a link that opens the board editor in
+a browser: the same avatars, presets, categories and controls as this
+window, updating live in both directions. Handy on a second screen, from
+the couch, or when the relay runs <code>--headless</code>. It has its own
+secret, separate from the guest link — the guest link can never edit
+anything, and this one grants full control, so keep it to yourself.
+<b>New link</b> revokes it everywhere.</p>
+
 <h2>Tray &amp; autostart</h2>
 <p>Closing the window keeps the relay running in the <b>system tray</b> —
 sharing stays up, and the tray menu has Open / Pause / Copy&nbsp;link /

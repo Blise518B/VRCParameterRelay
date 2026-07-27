@@ -154,6 +154,35 @@ class ShareDialog(QDialog):
         self.local_label = QLineEdit(readOnly=True)
         self.local_label.setStyleSheet("color:#5f6f63; font-size:11px;")
         lay.addWidget(self.local_label)
+
+        # -- admin panel (edit the board from a browser) ----------------------
+        admin_box = QGroupBox("Admin panel")
+        al = QVBoxLayout(admin_box)
+        al.setSpacing(6)
+        admin_hint = QLabel(
+            "Edit the board from a browser — the same avatar, presets, categories "
+            "and controls as this window. Useful when the relay runs headless or "
+            "on another machine. This link is <b>not</b> the guest link: it grants "
+            "full control, so share it with nobody.")
+        admin_hint.setWordWrap(True)
+        admin_hint.setStyleSheet("color:#94a698; font-size:12px;")
+        al.addWidget(admin_hint)
+        arow = QHBoxLayout()
+        self.admin_edit = QLineEdit(readOnly=True)
+        admin_copy = QPushButton("Copy")
+        admin_copy.clicked.connect(self._copy_admin)
+        admin_open = QPushButton("Open")
+        admin_open.clicked.connect(self._open_admin)
+        admin_reset = QPushButton("New link", objectName="Danger")
+        admin_reset.setToolTip("Invalidate the current admin link and make a new one")
+        admin_reset.clicked.connect(self._reset_admin)
+        arow.addWidget(self.admin_edit, 1)
+        arow.addWidget(admin_copy)
+        arow.addWidget(admin_open)
+        arow.addWidget(admin_reset)
+        al.addLayout(arow)
+        lay.addWidget(admin_box)
+
         self._refresh()
 
     # -- actions ---------------------------------------------------------------
@@ -191,6 +220,26 @@ class ShareDialog(QDialog):
         dlg.exec()
         self._refresh()
 
+    def admin_url(self) -> str:
+        port = self.main.web.port or self.main.web.requested_port
+        return f"http://127.0.0.1:{port}/admin?k={self.main.core.admin_token()}"
+
+    def _copy_admin(self) -> None:
+        QGuiApplication.clipboard().setText(self.admin_url())
+
+    def _open_admin(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl(self.admin_url()))
+
+    def _reset_admin(self) -> None:
+        if QMessageBox.question(
+                self, "New admin link",
+                "Make a new admin link? Any browser tab using the old one "
+                "loses access.") == QMessageBox.Yes:
+            self.main.core.regenerate_admin_token()
+            self._refresh()
+
     def _copy(self) -> None:
         if self.url_edit.text():
             QGuiApplication.clipboard().setText(self.url_edit.text())
@@ -221,6 +270,7 @@ class ShareDialog(QDialog):
         provider = tunnel.provider()
         token = self.main.core.guest_token()
 
+        self._refresh_admin()
         if self.main.selfhost_active():
             self.intro.setText(
                 "Self-hosted sharing: the link is your own address, served straight "
@@ -269,6 +319,10 @@ class ShareDialog(QDialog):
             self.note.setText("Quick tunnel (no account): the link stays the same while "
                               "the app runs; a new one is made after a restart or Reset. "
                               "For more options, open Link settings.")
+
+    def _refresh_admin(self) -> None:
+        if hasattr(self, "admin_edit"):
+            self.admin_edit.setText(self.admin_url())
 
     def _refresh_selfhost(self, sharing: bool, token: str) -> None:
         """Self-hosted mode: no tunnel — the link is the user's own address."""

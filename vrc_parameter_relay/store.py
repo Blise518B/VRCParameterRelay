@@ -21,6 +21,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "osc_send_host": "127.0.0.1",   # fallback — real target comes from VRChat's OSCQuery HOST_INFO
     "osc_send_port": 9000,
     "guest_token": None,             # generated on first run
+    # separate secret for the admin panel — a guest link must NEVER grant it
+    "admin_token": None,             # generated on first run
+    "admin_enabled": True,           # serve /admin at all
     "last_avatar_id": None,
     "tunnel_provider": "cloudflare",  # "ngrok" (static domain) or "selfhost"
     "ngrok_authtoken": "",
@@ -73,6 +76,8 @@ class Store:
             pass  # first run or corrupt file
         if not settings.get("guest_token"):
             settings["guest_token"] = new_token()
+        if not settings.get("admin_token"):
+            settings["admin_token"] = new_token()  # always distinct from the guest one
         self._write_json(path, settings)
         return settings
 
@@ -88,6 +93,11 @@ class Store:
     def regenerate_guest_token(self) -> str:
         token = new_token()
         self.set("guest_token", token)
+        return token
+
+    def regenerate_admin_token(self) -> str:
+        token = new_token()
+        self.set("admin_token", token)
         return token
 
     # -- avatar profiles ---------------------------------------------------

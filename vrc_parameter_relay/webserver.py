@@ -18,6 +18,7 @@ from typing import Optional, Set
 from aiohttp import WSMsgType, web
 
 from . import resource_path
+from .store import CATEGORY_COLORS
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +97,7 @@ class GuestServer:
         self._site = None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._sockets: Set[web.WebSocketResponse] = set()
+        self._admins: Set[web.WebSocketResponse] = set()
         self._names: dict[web.WebSocketResponse, str] = {}
         self._ids: dict[web.WebSocketResponse, int] = {}
         self._guest_seq = 0  # per-session counter behind "Anonymous #N"
@@ -115,6 +117,7 @@ class GuestServer:
         app = web.Application()
         app.router.add_get("/", self._index)
         app.router.add_get("/ws", self._ws)
+        app.router.add_get("/admin", self._admin_page)
         app.router.add_get("/health", lambda r: web.json_response({"ok": True}))
         app.router.add_get("/favicon.ico",
                            lambda r: web.FileResponse(web_root() / "favicon.png"))
@@ -210,6 +213,131 @@ class GuestServer:
             payload["params"] = self.core.param_snapshot()
         return payload
 
+    # -- admin panel ---------------------------------------------------------
+
+    def _admin_ok(self, token: str) -> bool:
+        if not self.core.store.settings.get("admin_enabled", True):
+            return False
+        return _tokens_match(token, self.core.admin_token())
+
+    async def _admin_page(self, request: web.Request) -> web.Response:
+        if not self._admin_ok(request.query.get("k", "")):
+            return web.Response(status=403, content_type="text/html", text=(
+                "<body style='background:#0a0c0a;color:#c9d4cc;"
+                "font-family:Segoe UI,sans-serif;padding:40px'>"
+                "<h2>Admin link invalid</h2><p>Open the app and copy the current "
+                "admin link (Share → Admin panel).</p></body>"))
+        return web.FileResponse(web_root() / "admin.html")
+
+    def _admin_state(self) -> dict:
+        """Everything the panel needs to draw itself."""
+        core = self.core
+        return {
+            "avatar_id": core.avatar_id,
+            "avatar_name": core.avatar_name,
+            "is_live": core.is_live,
+            "avatars": core.list_avatars(),
+            "presets": core.list_presets(),
+            "preset_id": core.board.get("id"),
+            "board": {"categories": core.board.get("categories", []),
+                      "controls": core.board.get("controls", [])},
+            "values": core.board_values(),
+            "params": core.param_snapshot(),
+            "sharing": core.sharing_enabled,
+            "yolo": core.yolo_enabled,
+            "guests": len(self._sockets),
+            "colors": list(CATEGORY_COLORS),
+            "style": self._style(),
+        }
+
+    async def _admin_ws(self, ws: web.WebSocketResponse) -> web.WebSocketResponse:
+        self._admins.add(ws)
+        await ws.send_json({"t": "admin_state", **self._admin_state()})
+        try:
+            async for msg in ws:
+                if msg.type != WSMsgType.TEXT:
+                    continue
+                try:
+                    data = json.loads(msg.data)
+                except ValueError:
+                    continue
+                try:
+                    result = self._admin_op(data)
+                except Exception as exc:  # noqa: BLE001 — report, never die
+                    log.exception("admin op failed: %s", data.get("op"))
+                    result = f"{type(exc).__name__}: {exc}"
+                if result:
+                    await ws.send_json({"t": "error", "msg": str(result)})
+                # Answer the sender directly with state as it is *now*. Other
+                # panels get their own snapshot from the core event. "for"
+                # marks this as the reply to that op — a broadcast queued by
+                # an earlier op can otherwise land in between.
+                await ws.send_json({"t": "admin_state", "for": data.get("op"),
+                                    **self._admin_state()})
+        finally:
+            self._admins.discard(ws)
+        return ws
+
+    def _admin_op(self, data: dict) -> Optional[str]:
+        """Run one panel command against the core. Returns an error or None."""
+        core = self.core
+        op = str(data.get("op") or "")
+        arg = data.get  # shorthand
+
+        if op == "set_value":
+            core.set_control_value(str(arg("id")), arg("value"), source="host")
+        elif op == "add_control":
+            ptype = (core.param_snapshot().get(str(arg("param")))
+                     or {}).get("ptype", "Float")
+            core.add_control(str(arg("param")), arg("kind") or core.default_kind(ptype),
+                             category=arg("cat"))
+        elif op == "update_control":
+            changes = {k: v for k, v in (data.get("changes") or {}).items()
+                       if k in ("label", "kind", "min", "max", "invert")}
+            core.update_control(str(arg("id")), **changes)
+        elif op == "remove_control":
+            core.remove_control(str(arg("id")))
+        elif op == "move_control":
+            core.move_control_to_category(str(arg("id")), str(arg("cat")),
+                                          int(arg("index") or 0))
+        elif op == "add_category":
+            core.add_category(arg("name") or None)
+        elif op == "rename_category":
+            core.rename_category(str(arg("cat")), str(arg("name") or ""))
+        elif op == "category_color":
+            core.set_category_color(str(arg("cat")), str(arg("color")))
+        elif op == "category_locked":
+            core.set_category_locked(str(arg("cat")), bool(arg("locked")))
+        elif op == "remove_category":
+            if not core.remove_category(str(arg("cat"))):
+                return "The board needs at least one category."
+        elif op == "move_category":
+            core.move_category(str(arg("cat")), str(arg("target")))
+        elif op == "copy_category":
+            core.copy_category_to_preset(str(arg("cat")), str(arg("preset")))
+        elif op == "add_preset":
+            core.add_preset(arg("name") or None)
+        elif op == "rename_preset":
+            core.rename_preset(str(arg("preset")), str(arg("name") or ""))
+        elif op == "remove_preset":
+            if not core.remove_preset(str(arg("preset"))):
+                return "The avatar needs at least one preset."
+        elif op == "switch_preset":
+            core.switch_preset(str(arg("preset")))
+        elif op == "open_avatar":
+            core.open_avatar(str(arg("avatar")))
+        elif op == "rename_avatar":
+            core.rename_avatar(str(arg("name") or ""))
+        elif op == "set_sharing":
+            core.set_sharing(bool(arg("enabled")))
+        elif op == "set_yolo":
+            core.set_yolo(bool(arg("enabled")))
+        elif op == "reset_guest_link":
+            core.regenerate_token()
+        else:
+            return f"unknown operation {op!r}"
+        return None
+
     # -- websocket ----------------------------------------------------------
 
     async def _ws(self, request: web.Request) -> web.WebSocketResponse:
@@ -217,6 +345,15 @@ class GuestServer:
         await ws.prepare(request)
 
         token = request.query.get("k", "")
+        if request.query.get("admin"):
+            # the admin secret is separate on purpose: a guest link, however
+            # widely shared, must never be able to edit the board
+            if not self._admin_ok(token):
+                await ws.send_json({"t": "denied"})
+                await ws.close()
+                return ws
+            return await self._admin_ws(ws)
+
         if not _tokens_match(token, self.core.guest_token()) or len(self._sockets) >= MAX_GUESTS:
             await ws.send_json({"t": "denied"})
             await ws.close()
@@ -274,7 +411,13 @@ class GuestServer:
 
     def _core_event(self, event: dict) -> None:
         """Called from arbitrary threads; hop onto the aiohttp loop."""
-        if not self.loop or event["t"] in ("vrc_status", "tunnel", "guests", "upnp"):
+        if not self.loop:
+            return
+        # panels mirror the desktop UI, so they get a fresh snapshot on any
+        # structural change (values stream as deltas via the guest path)
+        if self._admins and event["t"] not in ("param",):
+            self.loop.call_soon_threadsafe(self._schedule_admin)
+        if event["t"] in ("vrc_status", "tunnel", "guests", "upnp"):
             return
         if event["t"] == "token":  # link revoked -> drop everyone
             self.loop.call_soon_threadsafe(self._schedule, {"t": "denied"}, True)
@@ -285,6 +428,9 @@ class GuestServer:
                 else {"t": "paused"}
             self.loop.call_soon_threadsafe(self._schedule, payload, False)
             return
+        if event["t"] == "param" and self._admins:
+            self.loop.call_soon_threadsafe(
+                self._schedule_admin_param, event["name"], event["value"])
         out = None
         if event["t"] == "param":
             names = {c["param"] for c in self.core.board["controls"]}
@@ -312,6 +458,30 @@ class GuestServer:
 
     def _schedule(self, payload: dict, close: bool) -> None:
         asyncio.ensure_future(self._broadcast(payload, close))
+
+    def _schedule_admin_param(self, name: str, value) -> None:
+        asyncio.ensure_future(self._broadcast_admin_param(name, value))
+
+    async def _broadcast_admin_param(self, name: str, value) -> None:
+        payload = {"t": "param", "name": name, "value": value}
+        for ws in list(self._admins):
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                self._admins.discard(ws)
+
+    def _schedule_admin(self) -> None:
+        asyncio.ensure_future(self._broadcast_admin())
+
+    async def _broadcast_admin(self) -> None:
+        if not self._admins:
+            return
+        payload = {"t": "admin_state", **self._admin_state()}
+        for ws in list(self._admins):
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                self._admins.discard(ws)
 
     async def _broadcast(self, payload: dict, close: bool) -> None:
         for ws in list(self._sockets):
