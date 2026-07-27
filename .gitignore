@@ -15,3 +15,8 @@ data/
 .vscode/
 .idea/
 .venv-py310/
+
+# Anything private: local infrastructure probes, machine-specific scripts,
+# experiments touching the home LAN/NAS, unpublished side projects.
+# NEVER publishable — keep it here and it can't be committed by accident.
+/private/

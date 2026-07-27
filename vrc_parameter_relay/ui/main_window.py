@@ -3,21 +3,23 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import threading
 import urllib.request
 from typing import Any, Optional
 
 from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QDockWidget, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
-    QRadioButton, QScrollArea, QTextBrowser, QToolButton, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QRadioButton, QScrollArea, QSystemTrayIcon, QTextBrowser, QToolButton,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__
+from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__, resource_path
+from ..webserver import compose_selfhost_url
 from .dialogs import ControlDialog, ShareDialog
 from .theme import (
     DEFAULT_FONT, DEFAULT_THEME, FONT_GROUPS, THEME_LABELS, THEME_ORDER,
@@ -52,7 +54,8 @@ class _TitleBar(QWidget):
 
 
 class MainWindow(QMainWindow):
-    update_found = Signal(str)  # newer version tag available on GitHub
+    update_found = Signal(str)   # newer version tag available on GitHub
+    activate_requested = Signal()  # another start was attempted (from a thread)
 
     def __init__(self, core, tunnel, web) -> None:
         super().__init__()
@@ -89,11 +92,78 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(credit)
 
         self.update_found.connect(self._show_update)
+        # queued across threads: the guard fires from its listener thread
+        self.activate_requested.connect(self._tray_show)
 
+        self._build_tray()
         self._rebuild_board()
         self._refresh_params(core.param_snapshot())
         self._refresh_pause_btn()
         self._start_update_check()
+
+    # -- system tray -------------------------------------------------------------
+
+    def _build_tray(self) -> None:
+        self._quitting = False
+        self._tray_notice_shown = False
+        self.tray = None
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        icon_file = resource_path("assets/icon.ico")
+        icon = QIcon(str(icon_file)) if icon_file.exists() else self.windowIcon()
+        self.tray = QSystemTrayIcon(icon, self)
+        self._tray_menu = QMenu()
+        self._tray_menu.addAction("Open", self._tray_show)
+        self._tray_pause = self._tray_menu.addAction("Pause sharing",
+                                                     self._toggle_pause)
+        self._tray_menu.addAction("Copy share link", self._tray_copy_link)
+        self._tray_menu.addAction("Open board in browser", self._tray_open_browser)
+        self._tray_menu.addSeparator()
+        self._tray_menu.addAction("Quit", self.quit_app)
+        self.tray.setContextMenu(self._tray_menu)
+        self.tray.setToolTip(APP_NAME)
+        self.tray.activated.connect(
+            lambda reason: self._tray_show()
+            if reason == QSystemTrayIcon.Trigger else None)
+        self.tray.show()
+
+    def _tray_show(self) -> None:
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _tray_copy_link(self) -> None:
+        url = self.current_share_url()
+        if url:
+            QGuiApplication.clipboard().setText(url)
+            if self.tray:
+                self.tray.showMessage(APP_NAME, "Share link copied.",
+                                      QSystemTrayIcon.Information, 2000)
+
+    def _tray_open_browser(self) -> None:
+        """Open the guest board here — the tray equivalent of the window."""
+        url = self.current_share_url()
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
+
+    def current_share_url(self) -> str:
+        """The link guests should use right now (tunnel, self-host or local)."""
+        token = self.core.guest_token()
+        if self.selfhost_active():
+            settings = self.core.store.settings
+            url = compose_selfhost_url(
+                settings.get("selfhost_host", ""),
+                settings.get("selfhost_port") or settings.get("web_port"), token)
+            if url:
+                return url
+        if self.tunnel.state == "online" and self.tunnel.url:
+            return f"{self.tunnel.url}/?k={token}"
+        port = self.web.port or self.web.requested_port
+        return f"http://127.0.0.1:{port}/?k={token}"
+
+    def quit_app(self) -> None:
+        self._quitting = True
+        self.close()
 
     # -- window geometry ---------------------------------------------------------
 
@@ -117,6 +187,19 @@ class MainWindow(QMainWindow):
         size = self.normalGeometry().size()  # pre-maximize size, not the screen's
         self.core.store.set("window_size", [size.width(), size.height()])
         self.core.store.set("window_maximized", self.isMaximized())
+        # closing keeps the relay alive in the tray (unless quitting for real)
+        if (not self._quitting and self.tray is not None
+                and self.core.store.settings.get("close_to_tray", True)):
+            event.ignore()
+            self.hide()
+            if not self._tray_notice_shown:
+                self._tray_notice_shown = True
+                self.tray.showMessage(
+                    APP_NAME,
+                    "Still running here — sharing stays up. "
+                    "Right-click the icon for options.",
+                    QSystemTrayIcon.Information, 4000)
+            return
         super().closeEvent(event)
 
     # -- layout -----------------------------------------------------------------
@@ -206,7 +289,10 @@ class MainWindow(QMainWindow):
         help_btn.clicked.connect(lambda: HelpDialog(self).exec())
         #  = Segoe MDL2 "Setting" — a flat monochrome pictogram, so it
         # matches the other header buttons instead of a colour emoji gear
-        self.gear_btn = QPushButton("", objectName="GearBtn")
+        #  is Segoe MDL2 (Windows only); elsewhere use the plain
+        # gear with a text-presentation selector so it is not a colour emoji
+        gear_glyph = "" if sys.platform == "win32" else "⚙︎"
+        self.gear_btn = QPushButton(gear_glyph, objectName="GearBtn")
         self.gear_btn.setFixedWidth(34)
         self.gear_btn.setToolTip("Settings — design && font")
         self.gear_btn.setCursor(Qt.PointingHandCursor)
@@ -396,6 +482,8 @@ class MainWindow(QMainWindow):
         elif t == "sharing":
             self.share_dialog.refresh_state()
             self._refresh_pause_btn()
+        elif t == "upnp":
+            self.share_dialog.set_upnp_status(event)
         elif t == "yolo":
             self.yolo_btn.blockSignals(True)
             self.yolo_btn.setChecked(event["enabled"])
@@ -717,16 +805,26 @@ class MainWindow(QMainWindow):
                 menu.addAction(name)
         menu.exec(self.guest_chip.mapToGlobal(self.guest_chip.rect().bottomLeft()))
 
+    def selfhost_active(self) -> bool:
+        """True when advanced settings put sharing in self-hosted (no-tunnel) mode."""
+        settings = self.core.store.settings
+        return bool(settings.get("advanced_link")
+                    and settings.get("tunnel_provider") == "selfhost")
+
     def _toggle_pause(self) -> None:
         if self.core.sharing_enabled:
             self.core.set_sharing(False)   # emergency stop — guests stay connected
-        elif self.tunnel.state in ("downloading", "starting", "online"):
+        elif (self.tunnel.state in ("downloading", "starting", "online")
+                or self.selfhost_active()):
             self.core.set_sharing(True)
         else:
             self._open_share()             # nothing to pause — offer to start
 
     def _refresh_pause_btn(self) -> None:
-        tunnel_up = self.tunnel.state in ("downloading", "starting", "online")
+        # self-hosted mode has no tunnel: the address is always reachable,
+        # so pausing/resuming is available whenever sharing has a link
+        tunnel_up = (self.tunnel.state in ("downloading", "starting", "online")
+                     or self.selfhost_active())
         if self.core.sharing_enabled:
             self.pause_btn.setText("■ STOP")  # filled red — the emergency stop
             self.pause_btn.setProperty("state", "active")
@@ -744,6 +842,10 @@ class MainWindow(QMainWindow):
         self.pause_btn.setEnabled(self.core.sharing_enabled or tunnel_up)
         self.pause_btn.style().unpolish(self.pause_btn)
         self.pause_btn.style().polish(self.pause_btn)
+        if self.tray is not None:
+            self._tray_pause.setText("Pause sharing" if self.core.sharing_enabled
+                                     else "Resume sharing")
+            self._tray_pause.setEnabled(self.core.sharing_enabled or tunnel_up)
 
     # -- settings / theme + font ----------------------------------------------------
 
@@ -833,8 +935,10 @@ the <b>guests</b> chip to see the list (unnamed guests show as
 <i>Anonymous&nbsp;#N</i>). The red <b>STOP</b> button above the board is an
 emergency stop: it pauses everyone instantly without disconnecting them,
 then turns into <b>RESUME</b>. <b>Reset link</b> invalidates every link you've
-handed out. For a link that survives app restarts, set up a free ngrok
-static domain in <i>Link settings</i>.</p>
+handed out. <i>Link settings</i> hides more under <b>advanced settings</b>:
+a free permanent ngrok link, or fully <b>self-hosting</b> the guest page on
+your own port and domain/DDNS name — with optional automatic port opening
+(UPnP). Everything there is free; nothing ever bills you.</p>
 
 <h2>⚡ YOLO mode</h2>
 <p>The ⚡ YOLO button above the board gives guests the <i>full</i> parameter
@@ -847,6 +951,23 @@ clamped to safe ranges). It stays on until you turn it off.</p>
 <i>Midnight</i>, a darker look with thinner borders) — and <b>Font</b>, a
 live typeface picker (each row is shown in its own font). Changes apply
 instantly and are remembered.</p>
+
+<h2>Tray &amp; autostart</h2>
+<p>Closing the window keeps the relay running in the <b>system tray</b> —
+sharing stays up, and the tray menu has Open / Pause / Copy&nbsp;link /
+Open&nbsp;board&nbsp;in&nbsp;browser / Quit (turn this off in ⚙ Settings).
+There you can also enable <b>Start with Windows</b> or <b>Launch with
+SteamVR</b>, both starting minimized to the tray. <code>--tray</code>
+starts minimized manually; on systems without a tray it just opens the
+window instead.</p>
+
+<h2>Headless mode</h2>
+<p>Start the exe with <code>--headless</code> and it runs without a window:
+it connects to VRChat, loads your saved boards and starts sharing
+automatically with whatever link you configured here (tunnel or
+self-hosted, incl. UPnP). Perfect for auto-starting with Windows. Progress
+goes to the log file in the data folder; board edits made in a normally
+started window are picked up live.</p>
 
 <h2>Data &amp; updates</h2>
 <p>Boards and settings live in <code>%APPDATA%\\VRCParameterRelay</code>.
@@ -871,7 +992,7 @@ class HelpDialog(QDialog):
 
 
 class SettingsDialog(QDialog):
-    """Appearance settings — Design (theme) and Font, both applied live."""
+    """App settings — design, font, startup behaviour; applied live."""
 
     def __init__(self, main: "MainWindow") -> None:
         super().__init__(main)
@@ -948,6 +1069,81 @@ class SettingsDialog(QDialog):
         if checked_radio is not None:
             QTimer.singleShot(0, lambda: scroll.ensureWidgetVisible(checked_radio))
         lay.addWidget(font_box)
+
+        # -- Startup & tray ---------------------------------------------------
+        from .. import autostart, steamvr
+
+        startup = QGroupBox("Startup && tray")
+        sl = QVBoxLayout(startup)
+        sl.setSpacing(6)
+        sl.setContentsMargins(12, 8, 12, 10)
+
+        tray_check = QCheckBox("Keep running in the tray when the window is closed")
+        tray_check.setChecked(bool(settings.get("close_to_tray", True)))
+        tray_check.toggled.connect(
+            lambda on: main.core.store.set("close_to_tray", bool(on)))
+        if main.tray is None:
+            tray_check.setEnabled(False)
+            tray_check.setToolTip("No system tray available on this system")
+        sl.addWidget(tray_check)
+
+        self._startup_hint = QLabel("", objectName="SettingsHint")
+        self._startup_hint.setWordWrap(True)
+
+        def _mode_combo(current: str) -> QComboBox:
+            combo = QComboBox()
+            combo.addItem("minimized to tray", "tray")
+            combo.addItem("with the window open", "window")
+            idx = combo.findData(current if current in ("tray", "window") else "tray")
+            combo.setCurrentIndex(max(0, idx))
+            combo.setMinimumWidth(170)
+            return combo
+
+        system_name = "Windows" if sys.platform == "win32" else "the desktop"
+        win_row = QHBoxLayout()
+        win_check = QCheckBox(f"Start with {system_name}")
+        win_check.setChecked(autostart.is_enabled())
+        self.win_mode = _mode_combo(settings.get("autostart_mode", "tray"))
+        win_row.addWidget(win_check)
+        win_row.addWidget(self.win_mode)
+        win_row.addStretch(1)
+
+        def _apply_winstart() -> None:
+            mode = self.win_mode.currentData()
+            main.core.store.set("autostart_mode", mode)
+            error = autostart.set_enabled(win_check.isChecked(), mode)
+            self._startup_hint.setText(error)
+        win_check.toggled.connect(lambda _on: _apply_winstart())
+        # changing the mode only rewrites the entry when it's actually on
+        self.win_mode.activated.connect(
+            lambda _i: _apply_winstart() if win_check.isChecked()
+            else main.core.store.set("autostart_mode", self.win_mode.currentData()))
+        sl.addLayout(win_row)
+
+        vr_row = QHBoxLayout()
+        vr_check = QCheckBox("Launch with SteamVR")
+        vr_check.setChecked(bool(settings.get("steamvr_autolaunch")))
+        self.vr_mode = _mode_combo(settings.get("steamvr_mode", "tray"))
+        vr_row.addWidget(vr_check)
+        vr_row.addWidget(self.vr_mode)
+        vr_row.addStretch(1)
+
+        def _apply_steamvr() -> None:
+            mode = self.vr_mode.currentData()
+            main.core.store.set("steamvr_mode", mode)
+            on = vr_check.isChecked()
+            main.core.store.set("steamvr_autolaunch", on)
+            error = steamvr.apply(on, mode)
+            self._startup_hint.setText(
+                error if error else
+                ("Registered with SteamVR." if on else "Removed from SteamVR."))
+        vr_check.toggled.connect(lambda _on: _apply_steamvr())
+        self.vr_mode.activated.connect(
+            lambda _i: _apply_steamvr() if vr_check.isChecked()
+            else main.core.store.set("steamvr_mode", self.vr_mode.currentData()))
+        sl.addLayout(vr_row)
+        sl.addWidget(self._startup_hint)
+        lay.addWidget(startup)
 
         close = QPushButton("Close")
         close.clicked.connect(self.accept)

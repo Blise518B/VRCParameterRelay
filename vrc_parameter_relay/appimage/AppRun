@@ -1,2 +1,5 @@
 #!/bin/bash
-$APPDIR/VRCParameterRelay
+# Forward every argument, so the modes work from the AppImage:
+#   ./VRCParameterRelay-*.AppImage --headless
+#   ./VRCParameterRelay-*.AppImage --tray
+exec "$APPDIR/VRCParameterRelay" "$@"

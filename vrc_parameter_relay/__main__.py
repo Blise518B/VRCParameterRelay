@@ -10,6 +10,10 @@ import sys
 def main() -> int:
     parser = argparse.ArgumentParser(prog="vrc_parameter_relay")
     parser.add_argument("--verbose", action="store_true", help="debug logging")
+    parser.add_argument("--headless", action="store_true",
+                        help="run without a window; sharing starts automatically")
+    parser.add_argument("--tray", action="store_true",
+                        help="start minimized to the system tray")
     parser.add_argument("--screenshot", metavar="PATH",
                         help="dev: render the window offscreen, save a PNG, exit")
     args = parser.parse_args()
@@ -23,6 +27,20 @@ def main() -> int:
         data_dir().mkdir(parents=True, exist_ok=True)
         log_kwargs["filename"] = str(data_dir() / "vrc_parameter_relay.log")
     logging.basicConfig(**log_kwargs)
+
+    # one relay per data folder — autostart + a double-click must not give
+    # two instances fighting over the same boards and OSC stream
+    from .single_instance import acquire
+    from .store import data_dir as _data_dir
+    guard = acquire(_data_dir())
+    if guard is None:
+        logging.getLogger(__name__).info(
+            "already running for this data folder — showing that window instead")
+        return 0
+
+    if args.headless:
+        from .headless import run as run_headless  # never touches Qt
+        return run_headless(guard)
 
     if args.screenshot:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -59,10 +77,29 @@ def main() -> int:
         app.setWindowIcon(QIcon(str(icon_file)))
 
     window = MainWindow(core, tunnel, web)
+    # a second start (e.g. double-click while it sits in the tray) reveals
+    # this window instead of launching a rival relay
+    guard.on_activate = window.activate_requested.emit
 
     link.start()
     web.start()
-    window.show()
+    if args.tray and window.tray is not None:
+        logging.getLogger(__name__).info("started minimized to the tray")
+    else:
+        window.show()
+
+    # keep the autostart registrations pointing at the current (version-named)
+    # exe; both are no-ops unless the user enabled them
+    def refresh_autostarts() -> None:
+        try:
+            from . import autostart, steamvr
+            autostart.refresh(store.settings)
+            steamvr.refresh(store.settings)
+        except Exception:
+            logging.getLogger(__name__).exception("autostart refresh failed")
+
+    import threading
+    threading.Thread(target=refresh_autostarts, daemon=True).start()
 
     if store.settings.get("share_autostart"):
         import threading
@@ -75,13 +112,23 @@ def main() -> int:
                 time.sleep(0.1)
             if web.port:
                 core.set_sharing(True)
-                tunnel.start(web.port)
+                settings = store.settings
+                if (settings.get("advanced_link")
+                        and settings.get("tunnel_provider") == "selfhost"):
+                    if settings.get("selfhost_upnp"):
+                        from .upnp import map_async
+                        map_async(settings, web.port, core.emit)
+                else:
+                    tunnel.start(web.port)
 
         threading.Thread(target=autostart, daemon=True).start()
 
     def shutdown() -> None:
         tunnel.stop()
         link.stop()
+        from .upnp import cleanup_mappings
+        cleanup_mappings()  # close any router port we opened
+        guard.release()
 
     app.aboutToQuit.connect(shutdown)
 

@@ -34,11 +34,66 @@ def font_root() -> Path:
     return resource_path("assets/fonts")
 
 
+def lan_ip() -> str:
+    """This machine's address on the local network ("" if offline).
+
+    Nothing is sent — connecting a UDP socket just picks the route the OS
+    would use, which is how we learn the outgoing interface's address.
+    """
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("192.0.2.1", 9))  # TEST-NET-1, never routed anywhere
+        ip = sock.getsockname()[0]
+        return "" if ip.startswith("127.") else ip
+    except OSError:
+        return ""
+    finally:
+        sock.close()
+
+
+def _free_port() -> int:
+    """A concrete free TCP port (so dual-stack binds can share one)."""
+    import socket
+    sock = socket.socket()
+    try:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+    finally:
+        sock.close()
+
+
+def compose_selfhost_url(host: str, port, token: str) -> str:
+    """Public share link for self-hosted mode.
+
+    `host` may be a bare hostname (DDNS name, IP), host:port, or carry an
+    http(s):// scheme (reverse-proxy setups). Default ports are omitted.
+    """
+    base = (host or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if "://" not in base:
+        base = "http://" + base
+    scheme, rest = base.split("://", 1)
+    if ":" not in rest:  # no explicit port in the host field
+        try:
+            explicit = int(port or 0)
+        except (TypeError, ValueError):
+            explicit = 0
+        default = 443 if scheme == "https" else 80
+        if explicit and explicit != default:
+            base = f"{base}:{explicit}"
+    return f"{base}/?k={token}"
+
+
 class GuestServer:
     def __init__(self, core, port: int) -> None:
         self.core = core
         self.requested_port = port
         self.port: Optional[int] = None
+        self.bind_host = "127.0.0.1"
+        self._runner = None
+        self._site = None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._sockets: Set[web.WebSocketResponse] = set()
         self._names: dict[web.WebSocketResponse, str] = {}
@@ -68,16 +123,59 @@ class GuestServer:
         if fonts.is_dir():
             app.router.add_static("/fonts/", fonts, show_index=False)
         runner = web.AppRunner(app, access_log=None)
+        self._runner = runner
         self.loop.run_until_complete(runner.setup())
-        try:
-            site = web.TCPSite(runner, "127.0.0.1", self.requested_port)
-            self.loop.run_until_complete(site.start())
-        except OSError:
-            site = web.TCPSite(runner, "127.0.0.1", 0)  # port taken -> use a random one
-            self.loop.run_until_complete(site.start())
-        self.port = site._server.sockets[0].getsockname()[1]
-        log.info("guest web server on http://127.0.0.1:%d", self.port)
+        self.loop.run_until_complete(self._start_site())
         self.loop.run_forever()
+
+    async def _start_site(self) -> None:
+        """Bind the listener on the configured host/port and record both.
+
+        Never binds port 0: with a dual-stack bind asyncio makes one socket
+        per address family, and port 0 would hand each a *different* random
+        port. A concrete port is resolved first so both families share it.
+        """
+        host = self._bind_host()
+        port = self.requested_port or _free_port()
+        try:
+            site = web.TCPSite(self._runner, host, port)
+            await site.start()
+        except OSError:
+            port = _free_port()  # taken -> pick another concrete one
+            site = web.TCPSite(self._runner, host, port)
+            await site.start()
+        self._site = site
+        self.bind_host = host or "*"
+        self.port = port
+        log.info("guest web server on http://%s:%d", self.bind_host, self.port)
+
+    def _bind_host(self) -> Optional[str]:
+        """Loopback-only by default; every interface (IPv4 + IPv6) when
+        self-hosting — reverse proxies may sit on either family."""
+        settings = self.core.store.settings
+        selfhost = (settings.get("advanced_link")
+                    and settings.get("tunnel_provider") == "selfhost")
+        return None if selfhost else "127.0.0.1"
+
+    def rebind(self, port: Optional[int] = None) -> None:
+        """Re-create the listener with the current settings (thread-safe).
+
+        Existing guest connections stay open; only the listening socket moves.
+        """
+        if not self.loop:
+            return
+        if port:
+            self.requested_port = port
+        self.loop.call_soon_threadsafe(
+            lambda: asyncio.ensure_future(self._rebind()))
+
+    async def _rebind(self) -> None:
+        if self._runner is None:
+            return
+        if self._site is not None:
+            await self._site.stop()
+            self._site = None
+        await self._start_site()
 
     # -- http -------------------------------------------------------------
 
@@ -176,7 +274,7 @@ class GuestServer:
 
     def _core_event(self, event: dict) -> None:
         """Called from arbitrary threads; hop onto the aiohttp loop."""
-        if not self.loop or event["t"] in ("vrc_status", "tunnel", "guests"):
+        if not self.loop or event["t"] in ("vrc_status", "tunnel", "guests", "upnp"):
             return
         if event["t"] == "token":  # link revoked -> drop everyone
             self.loop.call_soon_threadsafe(self._schedule, {"t": "denied"}, True)

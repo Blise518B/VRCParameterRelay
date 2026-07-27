@@ -6,13 +6,15 @@
 import re
 import pathlib
 
+from PyInstaller.utils.hooks import collect_dynamic_libs
+
 _init = pathlib.Path("vrc_parameter_relay/__init__.py").read_text(encoding="utf-8")
 VERSION = re.search(r'__version__\s*=\s*"([^"]+)"', _init).group(1)
 
 a = Analysis(
     ['run.py'],
     pathex=[],
-    binaries=[],
+    binaries=collect_dynamic_libs('openvr'),  # openvr_api dll for SteamVR autostart
     datas=[
         ('vrc_parameter_relay/web', 'vrc_parameter_relay/web'),
         ('vrc_parameter_relay/assets', 'vrc_parameter_relay/assets'),

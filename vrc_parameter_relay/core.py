@@ -54,6 +54,8 @@ class AppCore:
             else normalize_profile({"name": "No avatar yet"}, None)
         )
         self.board: dict[str, Any] = self._active_preset()
+        self._profile_disk_mtime = (store.profile_mtime(self.avatar_id)
+                                    if self.avatar_id else 0.0)
         self._seed_params_from_profile()
 
         self.sharing_enabled = False  # runtime gate; guests are rejected while off
@@ -101,6 +103,29 @@ class AppCore:
     def _save(self) -> None:
         if self.avatar_id:
             self.store.save_profile(self.profile)
+            self._profile_disk_mtime = self.store.profile_mtime(self.avatar_id)
+
+    def poll_profile_change(self) -> bool:
+        """Reload the viewed profile if some OTHER process changed it on disk.
+
+        Lets a headless instance pick up board edits made in a parallel UI
+        instance (or by hand). Own saves update the remembered mtime, so they
+        never trigger a reload. Returns True when a reload happened.
+        """
+        with self._lock:
+            avatar_id = self.avatar_id
+            if not avatar_id:
+                return False
+            mtime = self.store.profile_mtime(avatar_id)
+            if mtime <= self._profile_disk_mtime:
+                return False
+            self.profile = self.store.load_profile(avatar_id)
+            self.board = self._active_preset()
+            self._profile_disk_mtime = mtime
+        log.info("profile changed on disk — reloaded %s", avatar_id)
+        self.emit({"t": "avatar", "id": avatar_id, "board": self.board,
+                   "values": self.board_values()})
+        return True
 
     def _seed_params_from_profile(self) -> None:
         """Offline view: show the saved parameter list (types, no live values)."""
@@ -126,6 +151,7 @@ class AppCore:
             self.avatar_id = avatar_id
             self.profile = self.store.load_profile(avatar_id)
             self.board = self._active_preset()
+            self._profile_disk_mtime = self.store.profile_mtime(avatar_id)
             if self.is_live:
                 self.params = {}  # the live stream + OSCQuery sync refill it
                 self.store.set("last_avatar_id", avatar_id)

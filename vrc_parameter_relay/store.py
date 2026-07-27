@@ -22,9 +22,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "osc_send_port": 9000,
     "guest_token": None,             # generated on first run
     "last_avatar_id": None,
-    "tunnel_provider": "cloudflare",  # or "ngrok" (static domain)
+    "tunnel_provider": "cloudflare",  # "ngrok" (static domain) or "selfhost"
     "ngrok_authtoken": "",
     "ngrok_domain": "",
+    "advanced_link": False,     # unlocks ngrok + self-hosting in Link settings
+    "selfhost_host": "",        # public hostname/domain (e.g. a DDNS name)
+    "selfhost_port": None,      # public port (router side); defaults to web_port
+    "selfhost_upnp": False,     # ask the router to open the port automatically
     "share_autostart": False,
     "yolo_enabled": False,
     "skip_update_version": "",  # release tag the user chose not to be reminded about
@@ -32,6 +36,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "window_maximized": False,
     "theme": "neon",            # UI theme: "neon" (default) or "broker" (Midnight)
     "font": "Segoe UI",         # UI font family
+    "close_to_tray": True,      # closing the window keeps the relay in the tray
+    "steamvr_autolaunch": False,  # register with SteamVR's auto-launch list
+    # how an auto-started instance comes up: "tray" or "window"
+    "autostart_mode": "tray",     # start with Windows / the Linux desktop
+    "steamvr_mode": "tray",       # launch with SteamVR
 }
 
 
@@ -86,6 +95,13 @@ class Store:
     def _profile_path(self, avatar_id: str) -> Path:
         safe = re.sub(r"[^A-Za-z0-9_\-]", "_", str(avatar_id))[:120]
         return self.avatar_dir / f"{safe}.json"
+
+    def profile_mtime(self, avatar_id: str) -> float:
+        """Last-modified time of the avatar's file on disk (0.0 if absent)."""
+        try:
+            return self._profile_path(avatar_id).stat().st_mtime
+        except OSError:
+            return 0.0
 
     def load_profile(self, avatar_id: str) -> dict[str, Any]:
         with self._lock:

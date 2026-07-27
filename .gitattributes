@@ -1,0 +1,7 @@
+# Normalise text files in the repo, but never hand Linux a CRLF script:
+# a CRLF shebang makes the AppImage fail with "bad interpreter".
+* text=auto
+
+*.sh       text eol=lf
+AppRun     text eol=lf
+*.desktop  text eol=lf

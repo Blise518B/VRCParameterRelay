@@ -6,9 +6,12 @@ from typing import Optional
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-    QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar,
-    QPushButton, QRadioButton, QVBoxLayout, QWidget,
+    QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QProgressBar, QPushButton, QRadioButton, QSpinBox, QVBoxLayout, QWidget,
 )
+
+from ..upnp import map_async
+from ..webserver import compose_selfhost_url, lan_ip
 
 KIND_CHOICES = {
     "Bool": [("Toggle switch", "toggle"), ("Hold button", "button")],
@@ -98,14 +101,10 @@ class ShareDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setSpacing(12)
 
-        intro = QLabel(
-            "Creates a public link so friends can use your board from anywhere — no "
-            "port forwarding needed. Pausing keeps everyone connected but shows them a "
-            "“paused” screen and blocks their inputs; the link keeps working until you "
-            "hit “Reset link”.")
-        intro.setWordWrap(True)
-        intro.setStyleSheet("color:#94a698;")
-        lay.addWidget(intro)
+        self.intro = QLabel()
+        self.intro.setWordWrap(True)
+        self.intro.setStyleSheet("color:#94a698;")
+        lay.addWidget(self.intro)
 
         self.state_label = QLabel("Sharing is off.")
         lay.addWidget(self.state_label)
@@ -161,18 +160,23 @@ class ShareDialog(QDialog):
 
     def _toggle(self) -> None:
         core, tunnel = self.main.core, self.main.tunnel
+        selfhost = self.main.selfhost_active()
         if not core.sharing_enabled:
             if not self.main.web.port:
                 self.state_label.setText("Web server not ready yet — try again in a second.")
                 return
             core.set_sharing(True)
-            if tunnel.state in ("off", "error"):
+            if selfhost:
+                if core.store.settings.get("selfhost_upnp"):
+                    self._upnp = None  # "in progress"
+                    map_async(core.store.settings, self.main.web.port, core.emit)
+            elif tunnel.state in ("off", "error"):
                 tunnel.start(self.main.web.port)
         else:
             core.set_sharing(False)
-            if tunnel.state in ("downloading", "starting"):
+            if not selfhost and tunnel.state in ("downloading", "starting"):
                 tunnel.stop()  # nothing shared yet — full cancel
-            # online tunnel stays up so the link survives the pause
+            # online tunnel / opened port stays up so the link survives the pause
         self._refresh()
 
     def _reset(self) -> None:
@@ -204,11 +208,32 @@ class ShareDialog(QDialog):
     def refresh_state(self) -> None:
         self._refresh()
 
+    _upnp = False  # False = never tried, None = in progress, dict = result
+
+    def set_upnp_status(self, event: dict) -> None:
+        self._upnp = event
+        self._refresh()
+
     def _refresh(self) -> None:
         tunnel = self.main.tunnel
         sharing = self.main.core.sharing_enabled
         state = tunnel.state
         provider = tunnel.provider()
+        token = self.main.core.guest_token()
+
+        if self.main.selfhost_active():
+            self.intro.setText(
+                "Self-hosted sharing: the link is your own address, served straight "
+                "from this machine. Pausing keeps everyone connected but shows them a "
+                "“paused” screen and blocks their inputs; the link keeps working until "
+                "you hit “Reset link”.")
+            self._refresh_selfhost(sharing, token)
+            return
+        self.intro.setText(
+            "Creates a public link so friends can use your board from anywhere — no "
+            "port forwarding needed. Pausing keeps everyone connected but shows them a "
+            "“paused” screen and blocks their inputs; the link keeps working until you "
+            "hit “Reset link”.")
 
         self.progress.setVisible(state == "downloading")
         if state == "downloading":
@@ -234,7 +259,6 @@ class ShareDialog(QDialog):
             self.state_label.setText("Sharing is off.")
             self.start_btn.setText("Start sharing")
 
-        token = self.main.core.guest_token()
         self.url_edit.setText(f"{tunnel.url}/?k={token}" if state == "online" else "")
         port = self.main.web.port or self.main.web.requested_port
         self.local_label.setText(f"local test: http://127.0.0.1:{port}/?k={token}")
@@ -244,7 +268,46 @@ class ShareDialog(QDialog):
         else:
             self.note.setText("Quick tunnel (no account): the link stays the same while "
                               "the app runs; a new one is made after a restart or Reset. "
-                              "For a permanent link, open Link settings.")
+                              "For more options, open Link settings.")
+
+    def _refresh_selfhost(self, sharing: bool, token: str) -> None:
+        """Self-hosted mode: no tunnel — the link is the user's own address."""
+        settings = self.main.core.store.settings
+        self.progress.setVisible(False)
+        if sharing:
+            self.state_label.setText("✅ Self-hosting — send this link to your friends:")
+            self.start_btn.setText("Pause sharing")
+        else:
+            self.state_label.setText("⏸ Not sharing — the address stays yours, "
+                                     "guests are blocked until you start.")
+            self.start_btn.setText("Start sharing")
+        url = compose_selfhost_url(settings.get("selfhost_host", ""),
+                                   settings.get("selfhost_port")
+                                   or settings.get("web_port"), token)
+        self.url_edit.setText(url)
+        port = self.main.web.port or self.main.web.requested_port
+        # self-hosters need the machine's own address (reverse proxy, router
+        # forward, or just testing from another device on the same network)
+        ip = lan_ip()
+        local = f"local test: http://127.0.0.1:{port}/?k={token}"
+        if ip:
+            local += f"    ·    on this network: http://{ip}:{port}/?k={token}"
+        self.local_label.setText(local)
+
+        ext_port = settings.get("selfhost_port") or settings.get("web_port")
+        lines = [f"Self-hosted: guests connect straight to this machine over plain "
+                 f"HTTP — make sure port {ext_port} reaches this PC."]
+        if self._upnp is None:
+            lines.append("UPnP: asking the router to open the port…")
+        elif isinstance(self._upnp, dict):
+            if self._upnp.get("ok"):
+                ip = self._upnp.get("info") or "?"
+                lines.append(f"UPnP: port {self._upnp.get('port')} opened ✓ "
+                             f"(public IP {ip})")
+            else:
+                lines.append(f"UPnP failed: {self._upnp.get('info')} — "
+                             "forward the port on your router manually.")
+        self.note.setText("\n".join(lines))
 
     def update_guests(self, n: int, names: Optional[list] = None) -> None:
         text = f"{n} guest{'s' if n != 1 else ''} connected"
@@ -264,23 +327,48 @@ class LinkSettingsDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
 
+        # -- simple view: what you get with zero setup ------------------------
+        simple = QLabel(
+            "Sharing uses a free <b>Cloudflare quick tunnel</b> — zero setup, "
+            "nothing to configure. The link changes each session.")
+        simple.setWordWrap(True)
+        lay.addWidget(simple)
+
+        self.adv_check = QCheckBox(
+            "Enable advanced settings (permanent ngrok link, self-hosting)")
+        self.adv_check.setChecked(bool(settings.get("advanced_link")))
+        self.adv_check.toggled.connect(self._update_visible)
+        lay.addWidget(self.adv_check)
+
+        # -- advanced: provider choice + per-provider fields ------------------
+        self.adv_box = QWidget()
+        adv = QVBoxLayout(self.adv_box)
+        adv.setContentsMargins(0, 4, 0, 0)
+        adv.setSpacing(10)
+
         self.cf_radio = QRadioButton("Cloudflare quick tunnel — zero setup, new URL per session")
         self.ngrok_radio = QRadioButton("ngrok static domain — the same URL forever")
-        (self.ngrok_radio if settings.get("tunnel_provider") == "ngrok"
-         else self.cf_radio).setChecked(True)
-        lay.addWidget(self.cf_radio)
-        lay.addWidget(self.ngrok_radio)
+        self.selfhost_radio = QRadioButton("Self-hosted — your own port and domain, no tunnel")
+        provider = settings.get("tunnel_provider")
+        {"ngrok": self.ngrok_radio, "selfhost": self.selfhost_radio}.get(
+            provider, self.cf_radio).setChecked(True)
+        adv.addWidget(self.cf_radio)
+        adv.addWidget(self.ngrok_radio)
+        adv.addWidget(self.selfhost_radio)
 
+        # ngrok section
+        self.ngrok_box = QGroupBox("ngrok static domain")
+        nl = QVBoxLayout(self.ngrok_box)
         help_label = QLabel(
-            'For a permanent link: create a free account at '
+            'Free: create an account at '
             '<a href="https://ngrok.com" style="color:#3af08b;">ngrok.com</a>, copy your '
-            '<b>authtoken</b>, claim your free <b>static domain</b> '
-            '(Dashboard → Domains), and paste both below.')
+            '<b>authtoken</b> and your assigned <b>*.ngrok-free.app domain</b> '
+            '(Dashboard → Domains), and paste both below. If the free limits are '
+            'ever exceeded the tunnel just stops — nothing is billed.')
         help_label.setWordWrap(True)
         help_label.setOpenExternalLinks(True)
         help_label.setStyleSheet("color:#94a698; font-size:12px;")
-        lay.addWidget(help_label)
-
+        nl.addWidget(help_label)
         form = QFormLayout()
         self.token_edit = QLineEdit(settings.get("ngrok_authtoken") or "")
         self.token_edit.setEchoMode(QLineEdit.Password)
@@ -288,7 +376,47 @@ class LinkSettingsDialog(QDialog):
         self.domain_edit.setPlaceholderText("yourname.ngrok-free.app")
         form.addRow("Authtoken", self.token_edit)
         form.addRow("Static domain", self.domain_edit)
-        lay.addLayout(form)
+        nl.addLayout(form)
+        adv.addWidget(self.ngrok_box)
+
+        # self-host section
+        self.selfhost_box = QGroupBox("Self-hosting")
+        sl = QVBoxLayout(self.selfhost_box)
+        sh_help = QLabel(
+            "The app serves the guest page directly on this machine and your "
+            "link is your own address — e.g. a free dynamic-DNS name "
+            "(FreeDNS/mooo.com, DuckDNS, …) kept up to date by your router.")
+        sh_help.setWordWrap(True)
+        sh_help.setStyleSheet("color:#94a698; font-size:12px;")
+        sl.addWidget(sh_help)
+        sform = QFormLayout()
+        self.listen_spin = QSpinBox()
+        self.listen_spin.setRange(1, 65535)
+        self.listen_spin.setValue(int(settings.get("web_port") or 3080))
+        self.host_edit = QLineEdit(settings.get("selfhost_host") or "")
+        self.host_edit.setPlaceholderText("myname.mooo.com   (or https://relay.example.com)")
+        self.public_spin = QSpinBox()
+        self.public_spin.setRange(1, 65535)
+        self.public_spin.setValue(int(settings.get("selfhost_port")
+                                      or settings.get("web_port") or 3080))
+        sform.addRow("Listen port", self.listen_spin)
+        sform.addRow("Public address", self.host_edit)
+        sform.addRow("Public port", self.public_spin)
+        sl.addLayout(sform)
+        self.upnp_check = QCheckBox("Open the port on the router automatically (UPnP)")
+        self.upnp_check.setChecked(bool(settings.get("selfhost_upnp")))
+        sl.addWidget(self.upnp_check)
+        warn = QLabel(
+            "⚠ Self-hosting exposes the guest page beyond this PC and serves it "
+            "over plain HTTP. Anyone with the link can use your board — use "
+            "“Reset link” if it leaks. For HTTPS, put a reverse proxy in front "
+            "and enter its https:// address above.")
+        warn.setWordWrap(True)
+        warn.setStyleSheet("color:#b3813a; font-size:12px;")
+        sl.addWidget(warn)
+        adv.addWidget(self.selfhost_box)
+
+        lay.addWidget(self.adv_box)
 
         note = QLabel("Changes apply the next time you start sharing.")
         note.setStyleSheet("color:#5f6f63; font-size:11px;")
@@ -299,23 +427,53 @@ class LinkSettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
 
-        for radio in (self.cf_radio, self.ngrok_radio):
-            radio.toggled.connect(self._update_enabled)
-        self._update_enabled()
+        for radio in (self.cf_radio, self.ngrok_radio, self.selfhost_radio):
+            radio.toggled.connect(self._update_visible)
+        self._update_visible()
 
-    def _update_enabled(self) -> None:
-        use_ngrok = self.ngrok_radio.isChecked()
-        self.token_edit.setEnabled(use_ngrok)
-        self.domain_edit.setEnabled(use_ngrok)
+    def _update_visible(self) -> None:
+        advanced = self.adv_check.isChecked()
+        self.adv_box.setVisible(advanced)
+        self.ngrok_box.setVisible(advanced and self.ngrok_radio.isChecked())
+        self.selfhost_box.setVisible(advanced and self.selfhost_radio.isChecked())
+        self.adjustSize()
 
     def _save(self) -> None:
         store = self.main.core.store
-        use_ngrok = self.ngrok_radio.isChecked()
-        if use_ngrok and not (self.token_edit.text().strip() and self.domain_edit.text().strip()):
-            QMessageBox.warning(self, "Missing info",
-                                "ngrok needs both the authtoken and the static domain.")
-            return
-        store.set("tunnel_provider", "ngrok" if use_ngrok else "cloudflare")
+        web = self.main.web
+        advanced = self.adv_check.isChecked()
+
+        if not advanced:
+            provider = "cloudflare"  # everything else is hidden -> don't keep it active
+        elif self.ngrok_radio.isChecked():
+            provider = "ngrok"
+            if not (self.token_edit.text().strip() and self.domain_edit.text().strip()):
+                QMessageBox.warning(self, "Missing info",
+                                    "ngrok needs both the authtoken and the static domain.")
+                return
+        elif self.selfhost_radio.isChecked():
+            provider = "selfhost"
+            if not self.host_edit.text().strip():
+                QMessageBox.warning(
+                    self, "Missing info",
+                    "Self-hosting needs a public address — the domain or DDNS "
+                    "name your friends will reach you under.")
+                return
+        else:
+            provider = "cloudflare"
+
+        store.set("advanced_link", advanced)
+        store.set("tunnel_provider", provider)
         store.set("ngrok_authtoken", self.token_edit.text().strip())
         store.set("ngrok_domain", self.domain_edit.text().strip())
+        store.set("selfhost_host", self.host_edit.text().strip())
+        store.set("selfhost_port", int(self.public_spin.value()))
+        store.set("selfhost_upnp", self.upnp_check.isChecked())
+        new_listen = int(self.listen_spin.value())
+        store.set("web_port", new_listen)
+
+        # re-bind live if the listener needs to move (port or loopback vs LAN)
+        if (web.bind_host != (web._bind_host() or "*")
+                or (web.port or 0) != new_listen):
+            web.rebind(new_listen)
         self.accept()
