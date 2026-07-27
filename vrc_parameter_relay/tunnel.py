@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -76,8 +77,10 @@ class Tunnel:
         with self._lock:
             if self.state in ("downloading", "starting", "online"):
                 return
-            exe = self._exe_path(self.provider())
-            self._set("downloading" if not exe.exists() else "starting")
+            provider = self.provider()
+            have_it = (self._system_exe(provider) is not None
+                       or self._exe_path(provider).exists())
+            self._set("starting" if have_it else "downloading")
         threading.Thread(target=self._start_impl, args=(local_port,), daemon=True).start()
 
     def stop(self) -> None:
@@ -109,6 +112,17 @@ class Tunnel:
     def _exe_path(self, provider: str) -> Path:
         return self.bin_dir / (NGROK_BINARY if provider == "ngrok" else CLOUDFLARED_BINARY)
 
+    def _system_exe(self, provider: str) -> Optional[Path]:
+        """An already-installed binary on PATH, if there is one.
+
+        Distro packages and winget/scoop installs are just as good as our
+        own copy — using them skips a ~50 MB download and keeps the tool
+        updated by whatever installed it.
+        """
+        name = "ngrok" if provider == "ngrok" else "cloudflared"
+        found = shutil.which(name)
+        return Path(found) if found else None
+
     def _start_impl(self, local_port: int) -> None:
         provider = self.provider()
         try:
@@ -118,14 +132,18 @@ class Tunnel:
                 if not token or not domain:
                     raise RuntimeError(
                         "ngrok needs an authtoken and a static domain — open Link settings.")
-            exe = self._exe_path(provider)
-            if not exe.exists():
-                self._download(provider, exe)
+            exe = self._system_exe(provider)  # already installed? use it
+            if exe is not None:
+                log.info("using the %s already on PATH: %s", provider, exe)
+            else:
+                exe = self._exe_path(provider)
+                if not exe.exists():
+                    self._download(provider, exe)
+                if sys.platform != "win32":  # our own copy needs the exec bit
+                    perms = os.stat(exe)
+                    os.chmod(exe, perms.st_mode | stat.S_IEXEC)
             self._set("starting")
             self._err_hint = None
-            if sys.platform == "linux":
-                getfileperms = os.stat(exe)
-                os.chmod(exe, getfileperms.st_mode | stat.S_IEXEC)
             if provider == "ngrok":
                 self._spawn_ngrok(exe, local_port, token, domain)
             else:
