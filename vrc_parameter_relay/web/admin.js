@@ -290,7 +290,11 @@ document.addEventListener("dragover", (e) => {
     clearGhosts();
     const g = document.createElement("div");
     g.className = "ghost-cat";
-    box.parentNode.insertBefore(g, box);
+    // move_category lands the box AFTER the target when dragged from an
+    // earlier slot and BEFORE it otherwise — the preview must match that
+    const ids = cats().map((c) => c.id);
+    const after = ids.indexOf(drag.id) < ids.indexOf(box.dataset.cat);
+    box.parentNode.insertBefore(g, after ? box.nextSibling : box);
     return;
   }
   // card / parameter: preview the slot inside this category

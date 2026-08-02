@@ -173,8 +173,7 @@ function render() {
     colWrap.appendChild(col);
   }
 
-  let visible = 0;
-  for (const cat of categories) {
+  for (const [index, cat] of categories.entries()) {
     const controls = board.controls.filter(
       (c) => c.cat === cat.id || (cat.id === firstId && !known.has(c.cat)));
     if (!controls.length) continue; // hide empty categories from guests
@@ -203,8 +202,9 @@ function render() {
       grid.appendChild(buildCard(control, cat.locked));
     }
     section.appendChild(grid);
-    cols[visible % colCount].appendChild(section);
-    visible++;
+    // column by absolute index — the parity must match the desktop window
+    // and admin panel, which round-robin ALL categories, empty ones included
+    cols[index % colCount].appendChild(section);
   }
   boardEl.appendChild(colWrap);
 

@@ -657,18 +657,27 @@ class MainWindow(QMainWindow):
         target_box = self.boxes.get(target_id)
         if pixmap is None or target_box is None:
             return
+        # move_category() lands the box AFTER the target when it comes from an
+        # earlier slot and BEFORE it otherwise — the preview must match that
+        cats = self.core.board["categories"]
+        src = next((i for i, c in enumerate(cats) if c["id"] == dragged_id), None)
+        dst = next((i for i, c in enumerate(cats) if c["id"] == target_id), None)
+        after = src is not None and dst is not None and src < dst
         for col in self.col_layouts:
-            for i in range(col.count()):
-                if col.itemAt(i).widget() is target_box:
-                    if (self._cat_ghost is not None
-                            and col.indexOf(self._cat_ghost) == i - 1):
-                        return  # already previewing this slot
-                    self._clear_cat_ghost()
-                    label = QLabel()
-                    label.setPixmap(pixmap)
-                    col.insertWidget(i, label)
-                    self._cat_ghost = label
-                    return
+            i = col.indexOf(target_box)
+            if i == -1:
+                continue
+            if self._cat_ghost is not None:
+                ghost_at = col.indexOf(self._cat_ghost)
+                if ghost_at != -1 and ghost_at == (i + 1 if after else i - 1):
+                    return  # already previewing this slot
+            self._clear_cat_ghost()
+            i = col.indexOf(target_box)  # removing the ghost may have shifted it
+            label = QLabel()
+            label.setPixmap(pixmap)
+            col.insertWidget(i + 1 if after else i, label)
+            self._cat_ghost = label
+            return
 
     def _clear_cat_ghost(self) -> None:
         if self._cat_ghost is not None:
