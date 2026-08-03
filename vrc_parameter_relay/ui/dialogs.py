@@ -127,6 +127,15 @@ class ShareDialog(QDialog):
             lambda on: main.core.store.set("share_autostart", bool(on)))
         lay.addWidget(self.autostart)
 
+        self.require_names = QCheckBox("Guests must enter a name before they can use the board")
+        self.require_names.setToolTip(
+            "Nameless guests see a name prompt and their inputs are ignored\n"
+            "until they introduce themselves. Applies to guests already connected.")
+        self.require_names.setChecked(bool(main.core.store.settings.get("require_guest_names")))
+        self.require_names.toggled.connect(
+            lambda on: main.core.set_require_names(bool(on)))
+        lay.addWidget(self.require_names)
+
         btns = QHBoxLayout()
         self.start_btn = QPushButton("Start sharing", objectName="Primary")
         self.start_btn.clicked.connect(self._toggle)

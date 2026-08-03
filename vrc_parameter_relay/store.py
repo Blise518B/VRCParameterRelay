@@ -34,6 +34,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "selfhost_upnp": False,     # ask the router to open the port automatically
     "share_autostart": False,
     "yolo_enabled": False,
+    "require_guest_names": False,  # guests must introduce themselves first
     "skip_update_version": "",  # release tag the user chose not to be reminded about
     "window_size": None,        # [w, h] of the main window, restored on start
     "window_maximized": False,

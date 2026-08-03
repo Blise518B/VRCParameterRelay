@@ -374,7 +374,11 @@ class GuestServer:
         self._ids[ws] = self._guest_seq
         self._names[ws] = _clean_name(request.query.get("n", ""))
         self._notify_guests()
-        await ws.send_json(self._hello_payload())
+        payload = self._hello_payload()
+        if (self.core.store.settings.get("require_guest_names")
+                and not self._names[ws]):
+            payload["need_name"] = True
+        await ws.send_json(payload)
 
         allowance, last = GUEST_MSGS_PER_SEC, time.monotonic()
         try:
@@ -397,6 +401,9 @@ class GuestServer:
                     continue
                 if not self.core.sharing_enabled:
                     continue  # paused — ignore guest input, keep the socket open
+                if (self.core.store.settings.get("require_guest_names")
+                        and not self._names.get(ws)):
+                    continue  # nameless while names are required — input ignored
                 if data.get("t") == "set":
                     self.core.set_control_value(str(data.get("id")), data.get("value"), source="guest")
                 elif data.get("t") == "setp":  # YOLO mode: arbitrary parameter
@@ -459,6 +466,9 @@ class GuestServer:
             out = {"t": "yolo", "enabled": event["enabled"]}
             if event["enabled"]:
                 out["params"] = self.core.param_snapshot()
+        elif event["t"] == "require_names":
+            # named guests ignore the "on" case client-side
+            out = {"t": "need_name", "enabled": event["enabled"]}
         elif event["t"] == "style":  # host switched theme/font — follow along
             out = {"t": "style", **self._style()}
         if out:

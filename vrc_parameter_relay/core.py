@@ -542,6 +542,13 @@ class AppCore:
         log.info("YOLO mode %s", "ENABLED" if enabled else "disabled")
         self.emit({"t": "yolo", "enabled": self.yolo_enabled})
 
+    def set_require_names(self, enabled: bool) -> None:
+        """Force guests to introduce themselves before their input counts."""
+        if bool(self.store.settings.get("require_guest_names")) == bool(enabled):
+            return
+        self.store.set("require_guest_names", bool(enabled))
+        self.emit({"t": "require_names", "enabled": bool(enabled)})
+
     def set_param_guest(self, name: str, value: Any) -> bool:
         """YOLO mode: guests may set any known parameter, clamped to VRChat's
         OSC ranges (Float -1..1, Int 0..255). Bypasses category locks by design."""

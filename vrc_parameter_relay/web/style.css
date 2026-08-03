@@ -341,6 +341,37 @@ input[type="range"] {
   line-height: 1.5;
 }
 
+/* name gate — shown when the host requires guests to introduce themselves */
+.gate-text { margin: 0 0 4px; }
+#gateInput {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 14px 0 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--card-edge);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  padding: 9px 12px;
+  outline: none;
+  text-align: center;
+}
+#gateInput:focus { border-color: var(--accent); }
+#gateBtn {
+  width: 100%;
+  background: var(--accent);
+  border: none;
+  border-radius: 8px;
+  color: #08120b;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+#gateBtn:hover { filter: brightness(1.12); }
+
 footer {
   position: fixed;
   bottom: 8px; right: 14px;

@@ -63,8 +63,13 @@ function connect() {
           setPaused(!!msg.paused);
         }
         if (msg.t === "resumed") setPaused(false);
+        if (msg.need_name) showNameGate();
         if (msg.params) allParams = msg.params;
         render();
+        break;
+      case "need_name":
+        if (msg.enabled === false) hideNameGate();
+        else showNameGate();
         break;
       case "yolo":
         yoloOn = !!msg.enabled;
@@ -442,6 +447,37 @@ function fmt(v) {
   const x = Number(v);
   return Number.isFinite(x) ? x.toFixed(2) : "–";
 }
+
+// -- name gate (host requires guests to introduce themselves) -------------
+const gateEl = document.getElementById("nameGate");
+const gateInput = document.getElementById("gateInput");
+
+function showNameGate() {
+  if (guestName) return; // already introduced — nothing to ask
+  gateEl.classList.remove("hidden");
+  gateInput.focus();
+}
+
+function hideNameGate() {
+  gateEl.classList.add("hidden");
+}
+
+function submitGate() {
+  const entered = gateInput.value.trim().slice(0, 24);
+  if (!entered) { gateInput.focus(); return; }
+  guestName = entered;
+  rememberName();
+  document.getElementById("nameBtn").textContent = `✎ ${guestName}`;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ t: "name", name: guestName }));
+  }
+  hideNameGate();
+}
+
+document.getElementById("gateBtn").onclick = submitGate;
+gateInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") submitGate();
+});
 
 function askName() {
   const entered = prompt("Your name (shown to the host):", guestName);
