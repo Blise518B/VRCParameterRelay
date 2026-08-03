@@ -4,6 +4,14 @@ Control your VRChat avatar parameters from a desktop panel — and let friends
 do it too, from any browser on phone or PC, through a share link. No port
 forwarding, no accounts, no setup.
 
+<p align="center">
+  <a href="https://github.com/Blise518B/VRCParameterRelay/releases/latest/download/VRCParameterRelay-Windows.exe">
+    <img src="docs/download-badge.svg" alt="Download for Windows — VRCParameterRelay-Windows.exe, latest release">
+  </a><br>
+  <sub>🐧 Linux? The AppImage is on the
+  <a href="https://github.com/Blise518B/VRCParameterRelay/releases/latest">Releases</a> page.</sub>
+</p>
+
 ![screenshot](docs/screenshot.png)
 
 ## What it does
@@ -23,9 +31,8 @@ forwarding, no accounts, no setup.
 
 ## Quick start
 
-1. Download `VRCParameterRelay.exe` from
-   [Releases](https://github.com/Blise518B/VRCParameterRelay/releases) —
-   a single file, nothing to install
+1. Hit the big **Download for Windows** button above — a single file,
+   nothing to install
 2. In VRChat: *Action Menu → Options → OSC → Enabled*
 3. Start the app, open the parameter panel (green tab on the right edge),
    double-click a parameter to make a control
@@ -40,7 +47,7 @@ unsigned exe — *More info → Run anyway*.
 - The app has to run on the same PC as VRChat
 - Quick-tunnel links change when you restart the app — use the ngrok option
   for a permanent one
-- Windows only for now
+- On Linux, use the AppImage from Releases
 
 ## From source
 
