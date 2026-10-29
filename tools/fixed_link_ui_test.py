@@ -123,6 +123,18 @@ def main() -> int:
     check("the tray hands out the fixed link", win.current_share_url() == fixed.url())
     check("the one-click link is the fixed link too", dlg._oneclick_url() == fixed.url())
     check("no password row on the fixed link", dlg.pw_box.isHidden())
+    check("the fixed link's window is just the link: other methods, admin panel "
+          "and footnote folded away",
+          dlg.more_box.isHidden() and dlg.admin_box.isHidden() and dlg.note.isHidden()
+          and not dlg.own_edit.isVisibleTo(dlg) and not dlg.settings_btn.isVisibleTo(dlg))
+    dlg.more_btn.click()
+    check("'Other sharing methods' opens Link settings and the own address",
+          not dlg.more_box.isHidden() and dlg.more_btn.text().startswith("▾"))
+    dlg.more_btn.click()
+    dlg.admin_btn.click()
+    check("the admin panel has its own fold", not dlg.admin_box.isHidden()
+          and dlg.more_box.isHidden())
+    dlg.admin_btn.click()
     check("new install: no What's new", not should_show(store.settings))
 
     win.start_sharing()
@@ -167,6 +179,8 @@ def main() -> int:
     store = Store()
     win, core, tun, fixed = window(store)
     check("update: still on the tunnel", win.share_method() == "tunnel")
+    check("...so 'Other sharing methods' starts open, with the footnote",
+          not win.share_dialog.more_box.isHidden() and not win.share_dialog.note.isHidden())
     check("update: What's new is due", should_show(store.settings))
     win.show()
     qapp.processEvents()

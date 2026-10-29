@@ -129,6 +129,17 @@ class ControlDialog(QDialog):
         return out
 
 
+def _fold_button() -> QPushButton:
+    """A flat ▸/▾ header that opens and closes a section of a window."""
+    btn = QPushButton(objectName="FoldBtn")
+    btn.setCursor(Qt.PointingHandCursor)
+    btn.setStyleSheet(
+        "#FoldBtn { text-align:left; border:none; background:transparent; "
+        "color:#94a698; padding:4px 0; font-weight:600; } "
+        "#FoldBtn:hover { color:#31f272; }")
+    return btn
+
+
 class _EnterLineEdit(QLineEdit):
     """Enter applies the field — without also pressing a dialog button."""
 
@@ -151,25 +162,6 @@ class ShareDialog(QDialog):
         self.intro.setWordWrap(True)
         self.intro.setStyleSheet("color:#94a698;")
         lay.addWidget(self.intro)
-
-        # Your own domain instead of a tunnel: the one field it takes. Whatever
-        # routes the address to this PC is the user's business (port forward,
-        # reverse proxy, Cloudflare Tunnel) — see docs/REMOTE-ACCESS.md.
-        own = QVBoxLayout()
-        own.setSpacing(3)
-        own_row = QHBoxLayout()
-        own_row.addWidget(QLabel("Your own address"))
-        self.own_edit = _EnterLineEdit(main.own_address())
-        self.own_edit.setPlaceholderText("optional — e.g. https://relay.yourdomain.com")
-        self.own_edit.setClearButtonEnabled(True)
-        self.own_edit.editingFinished.connect(self._apply_own_address)
-        own_row.addWidget(self.own_edit, 1)
-        own.addLayout(own_row)
-        self.own_hint = QLabel()
-        self.own_hint.setWordWrap(True)
-        self.own_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        own.addWidget(self.own_hint)
-        lay.addLayout(own)
 
         self.state_label = QLabel("Sharing is off.")
         lay.addWidget(self.state_label)
@@ -214,6 +206,23 @@ class ShareDialog(QDialog):
         pw_row.addWidget(pw_new)
         lay.addWidget(self.pw_box)
 
+        btns = QHBoxLayout()
+        self.start_btn = QPushButton("Start sharing", objectName="Primary")
+        self.start_btn.clicked.connect(self._toggle)
+        self.reset_btn = QPushButton("Reset link", objectName="Danger")
+        self.reset_btn.setToolTip(
+            "Invalidates every link you've handed out and kicks all guests.\n"
+            "Fixed link: you get a new fixed link. Cloudflare: also picks a "
+            "new random URL. ngrok and your own address: the address stays, "
+            "the secret changes.")
+        self.reset_btn.clicked.connect(self._reset)
+        btns.addWidget(self.start_btn)
+        btns.addWidget(self.reset_btn)
+        btns.addStretch(1)
+        self.guests_label = QLabel("")
+        btns.addWidget(self.guests_label)
+        lay.addLayout(btns)
+
         self.autostart = QCheckBox("Resume sharing automatically when the app starts")
         self.autostart.setChecked(bool(main.core.store.settings.get("share_autostart")))
         self.autostart.toggled.connect(
@@ -229,37 +238,61 @@ class ShareDialog(QDialog):
             lambda on: main.core.set_require_names(bool(on)))
         lay.addWidget(self.require_names)
 
-        btns = QHBoxLayout()
-        self.start_btn = QPushButton("Start sharing", objectName="Primary")
-        self.start_btn.clicked.connect(self._toggle)
-        self.reset_btn = QPushButton("Reset link", objectName="Danger")
-        self.reset_btn.setToolTip(
-            "Invalidates every link you've handed out and kicks all guests.\n"
-            "Fixed link: you get a new fixed link. Cloudflare: also picks a "
-            "new random URL. ngrok and your own address: the address stays, "
-            "the secret changes.")
-        self.reset_btn.clicked.connect(self._reset)
-        self.settings_btn = QPushButton("Link settings…")
-        self.settings_btn.clicked.connect(self._open_settings)
-        btns.addWidget(self.start_btn)
-        btns.addWidget(self.reset_btn)
-        btns.addWidget(self.settings_btn)
-        btns.addStretch(1)
-        self.guests_label = QLabel("")
-        btns.addWidget(self.guests_label)
-        lay.addLayout(btns)
-
         self.note = QLabel("")
         self.note.setWordWrap(True)
         self.note.setStyleSheet("color:#5f6f63; font-size:11px;")
         lay.addWidget(self.note)
 
+        # -- folded away: the other ways to share, and the admin panel --------
+        # The fixed link is all most people need, so the window opens on just
+        # that. The rest sits behind two folds at the bottom; the methods fold
+        # starts open for someone already sharing another way.
+        self.more_btn = _fold_button()
+        self.more_btn.clicked.connect(lambda: self._fold("more"))
+        lay.addWidget(self.more_btn)
+        self.more_box = QWidget()
+        ml = QVBoxLayout(self.more_box)
+        ml.setContentsMargins(0, 0, 0, 0)
+        ml.setSpacing(8)
+
+        method_row = QHBoxLayout()
+        self.settings_btn = QPushButton("Link settings…")
+        self.settings_btn.clicked.connect(self._open_settings)
+        method_row.addWidget(self.settings_btn)
+        method_hint = QLabel("Switch between the fixed link, a Cloudflare quick "
+                             "tunnel and ngrok.")
+        method_hint.setWordWrap(True)
+        method_hint.setStyleSheet("color:#94a698; font-size:12px;")
+        method_row.addWidget(method_hint, 1)
+        ml.addLayout(method_row)
+
+        # Your own domain instead: the one field it takes. Whatever routes the
+        # address to this PC is the user's business (port forward, reverse
+        # proxy, Cloudflare Tunnel) — see docs/REMOTE-ACCESS.md.
+        own_row = QHBoxLayout()
+        own_row.addWidget(QLabel("Your own address"))
+        self.own_edit = _EnterLineEdit(main.own_address())
+        self.own_edit.setPlaceholderText("optional — e.g. https://relay.yourdomain.com")
+        self.own_edit.setClearButtonEnabled(True)
+        self.own_edit.editingFinished.connect(self._apply_own_address)
+        own_row.addWidget(self.own_edit, 1)
+        ml.addLayout(own_row)
+        self.own_hint = QLabel()
+        self.own_hint.setWordWrap(True)
+        self.own_hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        ml.addWidget(self.own_hint)
+
         self.local_label = QLineEdit(readOnly=True)
         self.local_label.setStyleSheet("color:#5f6f63; font-size:11px;")
-        lay.addWidget(self.local_label)
+        ml.addWidget(self.local_label)
+        lay.addWidget(self.more_box)
 
         # -- admin panel (edit the board from a browser) ----------------------
-        admin_box = QGroupBox("Admin panel")
+        self.admin_btn = _fold_button()
+        self.admin_btn.clicked.connect(lambda: self._fold("admin"))
+        lay.addWidget(self.admin_btn)
+        admin_box = QGroupBox()
+        self.admin_box = admin_box
         al = QVBoxLayout(admin_box)
         al.setSpacing(6)
         admin_hint = QLabel(
@@ -306,7 +339,25 @@ class ShareDialog(QDialog):
 
         lay.addWidget(admin_box)
 
+        self._more_open = main.share_method() != "fixed"
+        self._admin_open = False
+        self._show_folds()
         self._refresh()
+
+    def _fold(self, which: str) -> None:
+        if which == "more":
+            self._more_open = not self._more_open
+        else:
+            self._admin_open = not self._admin_open
+        self._show_folds()
+
+    def _show_folds(self) -> None:
+        self.more_btn.setText(("▾  " if self._more_open else "▸  ") + "Other sharing methods")
+        self.more_box.setVisible(self._more_open)
+        self.admin_btn.setText(("▾  " if self._admin_open else "▸  ")
+                               + "Admin panel — edit the board from a browser")
+        self.admin_box.setVisible(self._admin_open)
+        self.adjustSize()
 
     def _refresh_admin_scope_note(self, public: bool) -> None:
         self.admin_public_note.setText(
@@ -445,6 +496,8 @@ class ShareDialog(QDialog):
         self._refresh_own_hint()
         self.pw_box.setVisible(False)
         self.oneclick_btn.setVisible(False)
+        # the fixed link needs no footnote; the other methods each explain theirs
+        self.note.setVisible(self.main.share_method() != "fixed")
         if self.main.own_address_active():
             self.intro.setText(
                 "Sharing on your own address — no tunnel. Pausing keeps everyone "
@@ -502,11 +555,8 @@ class ShareDialog(QDialog):
         fixed = self.main.fixed
         state = fixed.state
         self.intro.setText(
-            "Your fixed link — the same link every time, nothing to install. "
-            "Friends open it in any browser and it connects straight to this "
-            "app. Pausing keeps everyone connected but shows them a “paused” "
-            "screen and blocks their inputs; “Reset link” makes a new link and "
-            "kicks everyone on the old one.")
+            "Your fixed link stays the same every time. Friends open it in any "
+            "browser — nothing to install. “Reset link” makes a new one.")
         self.progress.setVisible(False)
         if state == "error":
             self.state_label.setText(f"⚠️ {fixed.error or 'The fixed link failed'}")
@@ -525,11 +575,9 @@ class ShareDialog(QDialog):
                                      "as you start sharing:")
             self.start_btn.setText("Start sharing")
         self.url_edit.setText(fixed.url())
+        self.url_edit.setCursorPosition(0)   # show where it goes, not the token's tail
         port = self.main.web.port or self.main.web.requested_port
         self.local_label.setText(f"local test: http://127.0.0.1:{port}/?k={token}")
-        self.note.setText("Fixed link: peer-to-peer through iroh's free relays, end-to-end "
-                          "encrypted — no tunnel, no account. Want the Cloudflare tunnel "
-                          "instead? Open Link settings.")
 
     def _refresh_admin(self) -> None:
         if hasattr(self, "admin_edit"):

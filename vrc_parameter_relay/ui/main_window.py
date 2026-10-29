@@ -1,8 +1,7 @@
 """Main window: control board, live parameter dock, share dialog."""
 from __future__ import annotations
 
-import json
-import re
+import html
 import subprocess
 import sys
 import threading
@@ -13,14 +12,14 @@ from typing import Any, Optional
 from PySide6.QtCore import QObject, QSize, QStandardPaths, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+    QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog,
     QDockWidget, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPushButton,
     QRadioButton, QScrollArea, QSystemTrayIcon, QTextBrowser, QToolButton,
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__, resource_path
+from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__, resource_path, updater
 from ..fixed_link import FixedLink
 from ..webserver import compose_public_url, normalize_public_url
 from .dialogs import ControlDialog, ShareDialog
@@ -33,7 +32,6 @@ from .whats_new import should_show as whats_new_due
 from .widgets import CategoryBox, ControlCard, ParamTree, drag_ghost
 
 RELEASES_URL = f"{GITHUB_URL}/VRCParameterRelay/releases"
-LATEST_API = "https://api.github.com/repos/Blise518B/VRCParameterRelay/releases/latest"
 
 
 def pick_update_asset(assets: list, platform: Optional[str] = None) -> Optional[dict]:
@@ -101,7 +99,8 @@ class _TitleBar(QWidget):
 
 
 class MainWindow(QMainWindow):
-    update_found = Signal(str)   # newer version tag available on GitHub
+    # (release info from updater.check_for_update or None, manual check?)
+    update_checked = Signal(object, bool)
     activate_requested = Signal()  # another start was attempted (from a thread)
 
     def __init__(self, core, tunnel, web, fixed=None) -> None:
@@ -130,11 +129,10 @@ class MainWindow(QMainWindow):
         self._build_params_dock()
         self.share_dialog = ShareDialog(self)
         self.statusBar().showMessage("Starting…")
-        self._latest_assets: list = []  # release downloads, set by the update check
-        self._update_tag = ""
+        self._update_info: Optional[dict] = None  # newest release, once known
         self.update_label = QLabel()
         self.update_label.setOpenExternalLinks(False)
-        self.update_label.linkActivated.connect(self._update_link_clicked)
+        self.update_label.linkActivated.connect(lambda _href: self._open_update_dialog())
         self.update_label.setVisible(False)
         self.statusBar().addWidget(self.update_label)
 
@@ -144,7 +142,7 @@ class MainWindow(QMainWindow):
         credit.setOpenExternalLinks(True)
         self.statusBar().addPermanentWidget(credit)
 
-        self.update_found.connect(self._show_update)
+        self.update_checked.connect(self._on_update_checked)
         # queued across threads: the guard fires from its listener thread
         self.activate_requested.connect(self._tray_show)
 
@@ -854,40 +852,36 @@ class MainWindow(QMainWindow):
 
     # -- update check ---------------------------------------------------------------
 
-    def _start_update_check(self) -> None:
-        threading.Thread(target=self._check_update, name="update-check", daemon=True).start()
+    def _start_update_check(self, manual: bool = False) -> None:
+        """Ask GitHub on a worker thread; the answer comes back through
+        update_checked. Never blocks the window, never raises."""
+        def worker() -> None:
+            self.update_checked.emit(updater.check_for_update(__version__), manual)
+        threading.Thread(target=worker, name="update-check", daemon=True).start()
 
-    def _check_update(self) -> None:
-        try:
-            req = urllib.request.Request(
-                LATEST_API, headers={"Accept": "application/vnd.github+json",
-                                     "User-Agent": "VRCParameterRelay"})
-            with urllib.request.urlopen(req, timeout=6) as res:
-                release = json.loads(res.read().decode("utf-8"))
-                tag = release.get("tag_name", "")
-        except Exception:
-            return  # offline / rate-limited / API down — silently skip
-        if tag and _is_newer(tag, __version__):
-            # remember the downloads so the dialog can grab the right one
-            self._latest_assets = [
-                {"name": a.get("name", ""), "url": a.get("browser_download_url", "")}
-                for a in release.get("assets", []) if a.get("browser_download_url")]
-            self.update_found.emit(tag)
+    def check_updates_now(self) -> None:
+        """Settings → Check for updates now (also reports 'up to date')."""
+        self._start_update_check(manual=True)
 
-    def _show_update(self, tag: str) -> None:
-        # user chose to stay on their version and silence reminders for this one
-        if self.core.store.settings.get("skip_update_version") == tag:
-            return
-        self._update_tag = tag
-        self.update_label.setText(
-            '<a href="#" style="color:#facc15; text-decoration:none;">'
-            f'⬆ Update available: {tag} — get it here</a>')
-        self.update_label.setVisible(True)
-        UpdateDialog(self, tag).exec()
+    def _on_update_checked(self, info: Optional[dict], manual: bool) -> None:
+        if info and info.get("available"):
+            self._update_info = info
+            self.update_label.setText(
+                '<a href="#" style="color:#facc15; text-decoration:none;">'
+                f'⬆ Update available: {html.escape(info["tag"])} — install it</a>')
+            self.update_label.setVisible(True)
+            # the launch check stays quiet about a version the user said
+            # "don't remind me" to; asking by hand always shows the window
+            if manual or self.core.store.settings.get("skip_update_version") != info["tag"]:
+                self._open_update_dialog()
+        if manual:
+            settings = getattr(self, "settings_dialog", None)
+            if settings is not None:
+                settings.show_update_result(info)
 
-    def _update_link_clicked(self, _href: str) -> None:
-        if self._update_tag:  # reopen the dialog: it knows the right download
-            UpdateDialog(self, self._update_tag).exec()
+    def _open_update_dialog(self) -> None:
+        if self._update_info:
+            UpdateDialog(self, self._update_info).exec()
         else:
             self.open_releases()
 
@@ -1167,8 +1161,11 @@ started window are picked up live.</p>
 
 <h2>Data &amp; updates</h2>
 <p>Boards and settings live in <code>%APPDATA%\\VRCParameterRelay</code>.
-On startup the app checks GitHub for a newer release and offers a download
-link — never installs anything by itself.</p>
+On startup the app checks GitHub for a newer release. When there is one,
+<b>Install now</b> downloads it, checks it against the release's fingerprint
+and restarts into the new version — nothing is installed without that click,
+and your boards stay as they are. ⚙ Settings → <i>Check for updates now</i>
+asks again any time.</p>
 """
 
 
@@ -1347,121 +1344,247 @@ class SettingsDialog(QDialog):
         sl.addWidget(self._startup_hint)
         lay.addWidget(startup)
 
+        # -- Updates ---------------------------------------------------------
+        updates = QGroupBox("Updates")
+        ul = QVBoxLayout(updates)
+        ul.setSpacing(6)
+        ul.setContentsMargins(12, 8, 12, 10)
+        how = ("New versions install with one click — the app downloads, checks "
+               "and restarts itself; your boards stay as they are."
+               if updater.is_self_updatable() else
+               "New versions are offered as a download.")
+        hint_u = QLabel(f"You're on v{__version__}. {how}", objectName="SettingsHint")
+        hint_u.setWordWrap(True)
+        ul.addWidget(hint_u)
+        row = QHBoxLayout()
+        self.check_btn = QPushButton("Check for updates now")
+        self.check_btn.clicked.connect(self._check_updates)
+        row.addWidget(self.check_btn)
+        self.update_result = QLabel("", objectName="SettingsHint")
+        self.update_result.setWordWrap(True)
+        row.addWidget(self.update_result, 1)
+        ul.addLayout(row)
+        lay.addWidget(updates)
+
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
         lay.addWidget(close, alignment=Qt.AlignRight)
 
+    def _check_updates(self) -> None:
+        self.check_btn.setEnabled(False)
+        self.update_result.setText("Asking GitHub…")
+        self.main.check_updates_now()
+
+    def show_update_result(self, info: Optional[dict]) -> None:
+        self.check_btn.setEnabled(True)
+        if info is None:
+            self.update_result.setText("Couldn't reach GitHub — try again later.")
+        elif info.get("available"):
+            self.update_result.setText(f"{info['tag']} is available.")
+        else:
+            self.update_result.setText("You're up to date.")
+
 
 class UpdateDialog(QDialog):
-    """Startup notification when a newer release is on GitHub.
+    """A newer release is on GitHub.
 
-    Knows which release download fits this OS: the primary button fetches
-    exactly that file into the user's Downloads folder and reveals it, so
-    nobody has to pick the right asset off the releases page by hand.
+    The one-file Windows exe installs it in place. Install now: download →
+    check size + SHA-256 → hand the swap to a detached helper → quit. The
+    helper waits for this process to exit, replaces the exe and starts the
+    new one (see updater.py). A build that can't replace itself (the Linux
+    AppImage, a source checkout) fetches its own download into the
+    Downloads folder and shows it; with no fitting download there's the
+    release page.
     """
 
-    _progress = Signal(int)   # download percent (-1 = size unknown)
-    _finished = Signal(str)   # saved file path
-    _failed = Signal(str)     # error text
+    _progress = Signal(int, int)   # done bytes, total bytes (0 = unknown)
+    _downloaded = Signal(str)      # verified update exe, "" when it failed
+    _saved = Signal(str)           # file saved to Downloads, "" when it failed
 
-    def __init__(self, main: "MainWindow", tag: str) -> None:
+    def __init__(self, main: "MainWindow", info: dict) -> None:
         super().__init__(main)
         self.main = main
-        self.tag = tag
-        self.asset = pick_update_asset(main._latest_assets)
-        self._fallback = False  # after a failed download: button opens GitHub
+        self.info = info
+        self.tag = info["tag"]
+        self.can_install = bool(info.get("asset")) and updater.is_self_updatable()
+        self.download = (None if self.can_install
+                         else pick_update_asset(info.get("assets") or []))
+        self._busy = False
         self.setWindowTitle("Update available")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(460)
         lay = QVBoxLayout(self)
         lay.setSpacing(12)
 
+        tag = html.escape(self.tag)
+        if self.can_install:
+            how = ("<b>Install now</b> downloads it, checks it and restarts the app — "
+                   "your boards and settings stay as they are.")
+        elif self.download:
+            how = (f"<b>Download</b> saves {html.escape(self.download['name'])} "
+                   "to your Downloads folder.")
+        else:
+            how = "Get the new version from the release page."
         msg = QLabel(
-            f"<b>{APP_NAME} {tag}</b> is available.<br>"
-            f"You're on v{__version__}.")
+            f"<b>{APP_NAME} {tag} is out.</b><br>You're on v{__version__}. "
+            f'<a href="{html.escape(info.get("url") or RELEASES_URL)}">See what\'s new</a>.'
+            f"<br><br>{how}")
         msg.setTextFormat(Qt.RichText)
+        msg.setWordWrap(True)
+        msg.setOpenExternalLinks(True)
         lay.addWidget(msg)
 
-        self.dont_remind = QCheckBox("Don't remind me again for this version")
+        self.status = QLabel("")
+        self.status.setWordWrap(True)
+        self.status.setVisible(False)
+        lay.addWidget(self.status)
+
+        self.dont_remind = QCheckBox(f"Don't remind me about {self.tag} again")
         lay.addWidget(self.dont_remind)
 
-        buttons = QDialogButtonBox()
-        osname = "Windows" if sys.platform.startswith("win") else "Linux"
-        self.update_btn = buttons.addButton(
-            f"⬇ Download for {osname}" if self.asset else "Take me to the update",
-            QDialogButtonBox.AcceptRole)
-        self.update_btn.setObjectName("Primary")
-        if self.asset:
-            self.update_btn.setToolTip(
-                f'Fetches {self.asset["name"]} straight into your Downloads folder')
-        buttons.addButton("Remind me later", QDialogButtonBox.RejectRole)
-        buttons.accepted.connect(self._go)
-        buttons.rejected.connect(self._later)
-        lay.addWidget(buttons)
+        # Enter means "Later": this window pops up on its own, and a keystroke
+        # meant for another app must never install + restart mid-session.
+        # Install now only reacts to a deliberate click.
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.later_btn = QPushButton("Later")
+        self.later_btn.setDefault(True)
+        self.later_btn.clicked.connect(self.reject)
+        row.addWidget(self.later_btn)
+        has_action = self.can_install or bool(self.download)
+        self.page_btn = QPushButton("Release page" if has_action else "Open release page")
+        self.page_btn.setAutoDefault(False)
+        self.page_btn.clicked.connect(self._open_page)
+        row.addWidget(self.page_btn)
+        self.install_btn: Optional[QPushButton] = None
+        self.download_btn: Optional[QPushButton] = None
+        if self.can_install:
+            self.install_btn = QPushButton("Install now", objectName="Primary")
+            self.install_btn.setAutoDefault(False)
+            self.install_btn.setFocusPolicy(Qt.NoFocus)  # not reachable by Tab+Space either
+            self.install_btn.clicked.connect(self._install)
+            row.addWidget(self.install_btn)
+        elif self.download:
+            osname = "Windows" if sys.platform.startswith("win") else "Linux"
+            self.download_btn = QPushButton(f"⬇ Download for {osname}", objectName="Primary")
+            self.download_btn.setAutoDefault(False)
+            self.download_btn.clicked.connect(self._save)
+            row.addWidget(self.download_btn)
+        else:
+            self.page_btn.setObjectName("Primary")
+        lay.addLayout(row)
 
         self._progress.connect(self._on_progress)
-        self._finished.connect(self._on_finished)
-        self._failed.connect(self._on_failed)
+        self._downloaded.connect(self._on_downloaded)
+        self._saved.connect(self._on_saved)
 
-    def _apply_skip(self) -> None:
+    def done(self, result: int) -> None:  # every close path ends here
+        if self._busy:
+            return  # mid-download: the window stays until it finishes or fails
         if self.dont_remind.isChecked():
             self.main.skip_update(self.tag)
+        super().done(result)
 
-    def _later(self) -> None:
-        self._apply_skip()
-        self.reject()
+    def _open_page(self) -> None:
+        QDesktopServices.openUrl(QUrl(self.info.get("url") or RELEASES_URL))
+        self.accept()
 
-    def _go(self) -> None:
-        self._apply_skip()
-        if not self.asset or self._fallback:
-            self.main.open_releases()
-            self.accept()
+    def _set_busy(self, busy: bool) -> None:
+        self._busy = busy
+        for widget in (self.later_btn, self.page_btn, self.install_btn,
+                       self.download_btn, self.dont_remind):
+            if widget is not None:
+                widget.setEnabled(not busy)
+
+    def _start(self, work) -> None:
+        self._set_busy(True)
+        self.status.setText("Downloading…")
+        self.status.setVisible(True)
+        threading.Thread(target=work, name="update-download", daemon=True).start()
+
+    def _install(self) -> None:
+        asset = self.info["asset"]
+
+        def worker() -> None:
+            path = updater.download_update(
+                asset, progress=lambda done, total: self._progress.emit(done, total))
+            self._downloaded.emit(path or "")
+        self._start(worker)
+
+    def _save(self) -> None:
+        def worker() -> None:
+            path = _save_download(
+                self.download, progress=lambda done, total: self._progress.emit(done, total))
+            self._saved.emit(path or "")
+        self._start(worker)
+
+    def _on_progress(self, done: int, total: int) -> None:
+        mb = done / (1024 * 1024)
+        self.status.setText(f"Downloading… {done * 100 // total}%  ({mb:.0f} MB)"
+                            if total else f"Downloading… {mb:.0f} MB")
+
+    def _on_downloaded(self, path: str) -> None:
+        if not path:
+            self._fail("The download failed or didn't check out — nothing was changed. "
+                       "Try again, or get it from the release page.")
             return
-        self.update_btn.setEnabled(False)
-        self.update_btn.setText("Downloading… 0%")
-        threading.Thread(target=self._download, name="update-download",
-                         daemon=True).start()
-
-    def _download(self) -> None:
-        dest = None
-        try:
-            dest = _unique_path(_download_dir(), self.asset["name"])
-            req = urllib.request.Request(
-                self.asset["url"], headers={"User-Agent": "VRCParameterRelay"})
-            with urllib.request.urlopen(req, timeout=30) as res, open(dest, "wb") as out:
-                total = int(res.headers.get("Content-Length") or 0)
-                done = 0
-                while True:
-                    chunk = res.read(65536)
-                    if not chunk:
-                        break
-                    out.write(chunk)
-                    done += len(chunk)
-                    self._progress.emit(int(done * 100 / total) if total else -1)
-            if dest.suffix.lower() == ".appimage":  # AppImages must be executable
-                dest.chmod(dest.stat().st_mode | 0o755)
-        except Exception as exc:
-            if dest is not None:
-                try:
-                    dest.unlink(missing_ok=True)  # never leave half a download
-                except OSError:
-                    pass
-            self._failed.emit(str(exc))
+        self.status.setText("Checked ✓ — restarting to install…")
+        if not updater.apply_update(path):
+            self._fail("Couldn't start the installer — nothing was changed. "
+                       f"The new version was saved to {path}")
             return
-        self._finished.emit(str(dest))
+        self._busy = False
+        self.accept()
+        # past close-to-tray, so this really ends the app; the helper swaps
+        # the exe once we're gone and starts the new one
+        self.main.quit_app()
+        QApplication.quit()
 
-    def _on_progress(self, pct: int) -> None:
-        self.update_btn.setText("Downloading…" if pct < 0 else f"Downloading… {pct}%")
-
-    def _on_finished(self, path: str) -> None:
-        self.update_btn.setText("Downloaded ✓")
+    def _on_saved(self, path: str) -> None:
+        if not path:
+            self._fail("The download failed — nothing was saved. Try again, "
+                       "or get it from the release page.")
+            return
+        self._busy = False
         _reveal_file(Path(path))
         self.accept()
 
-    def _on_failed(self, err: str) -> None:
-        self._fallback = True
-        self.update_btn.setEnabled(True)
-        self.update_btn.setText("Download failed — get it from GitHub")
-        self.update_btn.setToolTip(err)
+    def _fail(self, text: str) -> None:
+        self._set_busy(False)
+        self.status.setText(text)
+        for button in (self.install_btn, self.download_btn):
+            if button is not None:
+                button.setText("Try again")
+
+
+def _save_download(asset: dict, progress=None) -> Optional[str]:
+    """Fetch a release download into the Downloads folder (never over an
+    earlier file). The saved path, or None — and no half-written file —
+    when it failed."""
+    dest = None
+    try:
+        dest = _unique_path(_download_dir(), asset["name"])
+        req = urllib.request.Request(asset["url"], headers={"User-Agent": "VRCParameterRelay"})
+        with urllib.request.urlopen(req, timeout=30) as res, open(dest, "wb") as out:
+            total = int(res.headers.get("Content-Length") or 0)
+            done = 0
+            while True:
+                chunk = res.read(65536)
+                if not chunk:
+                    break
+                out.write(chunk)
+                done += len(chunk)
+                if progress is not None:
+                    progress(done, total)
+        if dest.suffix.lower() == ".appimage":  # AppImages must be executable
+            dest.chmod(dest.stat().st_mode | 0o755)
+        return str(dest)
+    except Exception:
+        if dest is not None:
+            try:
+                dest.unlink(missing_ok=True)  # never leave half a download
+            except OSError:
+                pass
+        return None
 
 
 def _fmt(value: Any) -> str:
@@ -1473,11 +1596,3 @@ def _fmt(value: Any) -> str:
         return f"{value:.3f}"
     return str(value)
 
-
-def _version_tuple(v: str) -> tuple:
-    nums = re.findall(r"\d+", v or "")
-    return tuple(int(n) for n in nums) if nums else (0,)
-
-
-def _is_newer(remote: str, local: str) -> bool:
-    return _version_tuple(remote) > _version_tuple(local)
