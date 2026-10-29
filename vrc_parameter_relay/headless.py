@@ -3,7 +3,7 @@
 Same program, same data, same settings — just no Qt. Start the exe (or
 ``python -m vrc_parameter_relay``) with ``--headless`` and it connects to
 VRChat, loads the saved boards, starts sharing with the configured link
-provider (Cloudflare / ngrok, or no tunnel at all on your own address) and
+(the fixed link, a Cloudflare / ngrok tunnel, or your own address) and
 keeps running until killed. Board edits made by a parallel UI instance are picked up live via
 the profile hot-reload poll.
 
@@ -19,6 +19,7 @@ from typing import Optional
 
 from . import APP_NAME, __version__
 from .core import AppCore
+from .fixed_link import FixedLink
 from .osc_link import VrcLink
 from .store import Store
 from .tunnel import Tunnel
@@ -36,9 +37,11 @@ class HeadlessApp:
         self.core = AppCore(self.store, self.link)
         self.web = GuestServer(self.core, self.store.settings["web_port"])
         self.tunnel = Tunnel(self.store)
+        self.fixed = FixedLink(self.store, self.web)
         self.stop_event = threading.Event()
         self.guard = None  # set by run(); tests construct without one
         self.tunnel.on_change = self._tunnel_changed
+        self.fixed.on_change = self._fixed_changed
         self.core.add_listener(self._log_event)
 
     # -- logging hooks (the log file is the headless "UI") ---------------------
@@ -51,6 +54,13 @@ class HeadlessApp:
                      self.core.guest_token())
         elif state == "error":
             log.error("tunnel error: %s", status.get("error"))
+
+    def _fixed_changed(self, status: dict) -> None:
+        self.core.emit({"t": "fixed_link", **status})
+        if status.get("state") == "online":
+            log.info("SHARE LINK (fixed — the same every start): %s", status.get("url"))
+        elif status.get("state") == "error":
+            log.error("fixed link error: %s", status.get("error"))
 
     def _log_event(self, event: dict) -> None:
         kind = event.get("t")
@@ -86,8 +96,10 @@ class HeadlessApp:
             if address.startswith("http://"):
                 log.warning("own address is plain http:// — the password "
                             "crosses the internet unencrypted")
-        else:
+        elif self.store.settings.get("share_method") == "tunnel":
             self.tunnel.start(self.web.port)
+        else:
+            self.fixed.start()
         log.info("local test link: http://127.0.0.1:%d/?k=%s",
                  self.web.port, self.core.guest_token())
         ip = lan_ip()
@@ -118,6 +130,7 @@ class HeadlessApp:
     def shutdown(self) -> None:
         log.info("shutting down…")
         self.tunnel.stop()
+        self.fixed.stop()
         self.link.stop()
         if self.guard is not None:
             self.guard.release()

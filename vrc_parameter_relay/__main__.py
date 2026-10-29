@@ -48,6 +48,7 @@ def main() -> int:
     from PySide6.QtWidgets import QApplication
 
     from .core import AppCore
+    from .fixed_link import FixedLink
     from .osc_link import VrcLink
     from .store import Store
     from .tunnel import Tunnel
@@ -60,6 +61,7 @@ def main() -> int:
     core = AppCore(store, link)
     web = GuestServer(core, store.settings["web_port"])
     tunnel = Tunnel(store)
+    fixed = FixedLink(store, web)
 
     from . import APP_NAME
 
@@ -76,7 +78,7 @@ def main() -> int:
     if icon_file.exists():
         app.setWindowIcon(QIcon(str(icon_file)))
 
-    window = MainWindow(core, tunnel, web)
+    window = MainWindow(core, tunnel, web, fixed)
     # a second start (e.g. double-click while it sits in the tray) reveals
     # this window instead of launching a rival relay
     guard.on_activate = window.activate_requested.emit
@@ -112,13 +114,18 @@ def main() -> int:
                 time.sleep(0.1)
             if web.port:
                 core.set_sharing(True)
-                if not store.settings.get("public_url"):  # own address: no tunnel
+                if store.settings.get("public_url"):
+                    pass  # own address: nothing to start
+                elif store.settings.get("share_method") == "tunnel":
                     tunnel.start(web.port)
+                else:
+                    fixed.start()
 
         threading.Thread(target=autostart, daemon=True).start()
 
     def shutdown() -> None:
         tunnel.stop()
+        fixed.stop()
         link.stop()
         guard.release()
 

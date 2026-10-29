@@ -6,7 +6,7 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+    QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QProgressBar, QPushButton, QRadioButton, QSpinBox, QVBoxLayout, QWidget,
 )
@@ -235,8 +235,9 @@ class ShareDialog(QDialog):
         self.reset_btn = QPushButton("Reset link", objectName="Danger")
         self.reset_btn.setToolTip(
             "Invalidates every link you've handed out and kicks all guests.\n"
-            "Cloudflare: also picks a new random URL. ngrok and your own "
-            "address: the address stays, the secret changes.")
+            "Fixed link: you get a new fixed link. Cloudflare: also picks a "
+            "new random URL. ngrok and your own address: the address stays, "
+            "the secret changes.")
         self.reset_btn.clicked.connect(self._reset)
         self.settings_btn = QPushButton("Link settings…")
         self.settings_btn.clicked.connect(self._open_settings)
@@ -326,9 +327,10 @@ class ShareDialog(QDialog):
         self._refresh()
 
     def _reset(self) -> None:
-        self.main.core.regenerate_token()
+        self.main.core.regenerate_token()   # the fixed link's new link is just this
         tunnel = self.main.tunnel
-        if tunnel.provider() == "cloudflare" and tunnel.state in ("starting", "online"):
+        if (self.main.share_method() == "tunnel" and tunnel.provider() == "cloudflare"
+                and tunnel.state in ("starting", "online")):
             tunnel.restart(self.main.web.port)  # quick tunnels: new random URL too
         self._refresh()
 
@@ -362,6 +364,8 @@ class ShareDialog(QDialog):
         token = self.main.core.guest_token()
         if self.main.own_address_active():
             return compose_public_url(self.main.own_address(), token)
+        if self.main.share_method() == "fixed":
+            return self.main.fixed.url()
         tunnel = self.main.tunnel
         return f"{tunnel.url}/?k={token}" if tunnel.state == "online" else ""
 
@@ -411,15 +415,17 @@ class ShareDialog(QDialog):
             self.own_edit.setText(address)
         if not address:
             self._show_own_hint(
-                "Leave empty to share through a free tunnel. Have your own "
-                "domain? Enter it here and it becomes the link — the same one "
-                "every session.")
+                "Leave empty to share with your fixed link (or the tunnel "
+                "picked in Link settings). Have your own domain? Enter it here "
+                "and it becomes the link instead.")
             return
         port = self.main.web.port or self.main.web.requested_port
         ip = lan_ip() or "this PC"
+        back = ("the tunnel" if self.main.core.store.settings.get("share_method") == "tunnel"
+                else "your fixed link")
         text = (f"Point {address.split('://', 1)[1]} at http://{ip}:{port} — with "
                 f"a router port forward, a reverse proxy or a Cloudflare Tunnel. "
-                f"Empty the field to go back to the tunnel.")
+                f"Empty the field to go back to {back}.")
         if address.startswith("http://"):
             self._show_own_hint(
                 text + "\n⚠ Plain http:// — the password crosses the internet "
@@ -445,6 +451,9 @@ class ShareDialog(QDialog):
                 "connected but shows them a “paused” screen and blocks their "
                 "inputs; “Reset link” logs everyone out.")
             self._refresh_own_address(sharing, token)
+            return
+        if self.main.share_method() == "fixed":
+            self._refresh_fixed(sharing, token)
             return
         self.intro.setText(
             "Creates a public link so friends can use your board from anywhere — no "
@@ -486,6 +495,41 @@ class ShareDialog(QDialog):
             self.note.setText("Quick tunnel (no account): the link stays the same while "
                               "the app runs; a new one is made after a restart or Reset. "
                               "For more options, open Link settings.")
+
+    def _refresh_fixed(self, sharing: bool, token: str) -> None:
+        """The fixed link: one link that never changes, shown even before
+        sharing starts — it is already the link it will be."""
+        fixed = self.main.fixed
+        state = fixed.state
+        self.intro.setText(
+            "Your fixed link — the same link every time, nothing to install. "
+            "Friends open it in any browser and it connects straight to this "
+            "app. Pausing keeps everyone connected but shows them a “paused” "
+            "screen and blocks their inputs; “Reset link” makes a new link and "
+            "kicks everyone on the old one.")
+        self.progress.setVisible(False)
+        if state == "error":
+            self.state_label.setText(f"⚠️ {fixed.error or 'The fixed link failed'}")
+            self.start_btn.setText("Pause sharing" if sharing else "Start sharing")
+        elif sharing and state == "online":
+            self.state_label.setText("✅ Sharing is live — send this link to your friends:")
+            self.start_btn.setText("Pause sharing")
+        elif sharing:
+            self.state_label.setText("Connecting to iroh's relays…")
+            self.start_btn.setText("Pause sharing")
+        elif state in ("starting", "online"):
+            self.state_label.setText("⏸ Paused — guests are blocked, the link below stays valid.")
+            self.start_btn.setText("Resume sharing")
+        else:
+            self.state_label.setText("Sharing is off — this is your link; it works as soon "
+                                     "as you start sharing:")
+            self.start_btn.setText("Start sharing")
+        self.url_edit.setText(fixed.url())
+        port = self.main.web.port or self.main.web.requested_port
+        self.local_label.setText(f"local test: http://127.0.0.1:{port}/?k={token}")
+        self.note.setText("Fixed link: peer-to-peer through iroh's free relays, end-to-end "
+                          "encrypted — no tunnel, no account. Want the Cloudflare tunnel "
+                          "instead? Open Link settings.")
 
     def _refresh_admin(self) -> None:
         if hasattr(self, "admin_edit"):
@@ -538,14 +582,26 @@ class LinkSettingsDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setSpacing(10)
 
-        # -- simple view: what you get with zero setup ------------------------
-        simple = QLabel(
-            "Sharing uses a free <b>Cloudflare quick tunnel</b> — zero setup, "
-            "nothing to configure. The link changes each session.<br>"
-            "Have your own domain? Enter it as <b>Your own address</b> in the "
-            "Share window instead — no tunnel needed.")
-        simple.setWordWrap(True)
-        lay.addWidget(simple)
+        # -- how the link reaches this PC ---------------------------------------
+        lay.addWidget(QLabel("<b>How friends reach your board</b>"))
+
+        def _choice(text: str, hint: str) -> QRadioButton:
+            radio = QRadioButton(text)
+            lay.addWidget(radio)
+            label = QLabel(hint)
+            label.setWordWrap(True)
+            label.setStyleSheet("color:#94a698; font-size:12px; margin-left:26px;")
+            lay.addWidget(label)
+            return radio
+
+        self.fixed_radio = _choice(
+            "Fixed link (recommended)",
+            "The same link every time — across restarts, until you Reset it. "
+            "Peer-to-peer through iroh's free relays, end-to-end encrypted. "
+            "Nothing to install, no account.")
+        self.cf_radio = _choice(
+            "Cloudflare quick tunnel",
+            "A new link every session. Downloads cloudflared once.")
 
         self.adv_check = QCheckBox(
             "Enable advanced settings (permanent ngrok link)")
@@ -553,18 +609,20 @@ class LinkSettingsDialog(QDialog):
         self.adv_check.toggled.connect(self._update_visible)
         lay.addWidget(self.adv_check)
 
-        # -- advanced: provider choice + per-provider fields ------------------
+        # -- advanced: ngrok + its fields -------------------------------------
         self.adv_box = QWidget()
         adv = QVBoxLayout(self.adv_box)
         adv.setContentsMargins(0, 4, 0, 0)
         adv.setSpacing(10)
 
-        self.cf_radio = QRadioButton("Cloudflare quick tunnel — zero setup, new URL per session")
         self.ngrok_radio = QRadioButton("ngrok static domain — the same URL forever")
-        (self.ngrok_radio if settings.get("tunnel_provider") == "ngrok"
-         else self.cf_radio).setChecked(True)
-        adv.addWidget(self.cf_radio)
         adv.addWidget(self.ngrok_radio)
+        if settings.get("share_method") != "tunnel":
+            self.fixed_radio.setChecked(True)
+        elif settings.get("tunnel_provider") == "ngrok":
+            self.ngrok_radio.setChecked(True)
+        else:
+            self.cf_radio.setChecked(True)
 
         # ngrok section
         self.ngrok_box = QGroupBox("ngrok static domain")
@@ -591,7 +649,14 @@ class LinkSettingsDialog(QDialog):
 
         lay.addWidget(self.adv_box)
 
-        note = QLabel("Changes apply the next time you start sharing.")
+        own = QLabel("Have your own domain? Enter it as <b>Your own address</b> in the "
+                     "Share window — it takes over from all of these.")
+        own.setWordWrap(True)
+        own.setStyleSheet("color:#94a698; font-size:12px;")
+        lay.addWidget(own)
+
+        note = QLabel("Switching applies right away; guests on the old link are "
+                      "disconnected.")
         note.setStyleSheet("color:#5f6f63; font-size:11px;")
         lay.addWidget(note)
 
@@ -600,12 +665,17 @@ class LinkSettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         lay.addWidget(buttons)
 
-        for radio in (self.cf_radio, self.ngrok_radio):
+        # one choice across both groups (ngrok sits in the advanced box)
+        self.method_group = QButtonGroup(self)
+        for radio in (self.fixed_radio, self.cf_radio, self.ngrok_radio):
+            self.method_group.addButton(radio)
             radio.toggled.connect(self._update_visible)
         self._update_visible()
 
     def _update_visible(self) -> None:
         advanced = self.adv_check.isChecked()
+        if not advanced and self.ngrok_radio.isChecked():
+            self.cf_radio.setChecked(True)   # hidden options never stay picked
         self.adv_box.setVisible(advanced)
         self.ngrok_box.setVisible(advanced and self.ngrok_radio.isChecked())
         self.adjustSize()
@@ -614,17 +684,22 @@ class LinkSettingsDialog(QDialog):
         store = self.main.core.store
         advanced = self.adv_check.isChecked()
 
-        if advanced and self.ngrok_radio.isChecked():
+        method = "fixed" if self.fixed_radio.isChecked() else "tunnel"
+        provider = store.settings.get("tunnel_provider") or "cloudflare"
+        if self.ngrok_radio.isChecked():
             provider = "ngrok"
             if not (self.token_edit.text().strip() and self.domain_edit.text().strip()):
                 QMessageBox.warning(self, "Missing info",
                                     "ngrok needs both the authtoken and the static domain.")
                 return
-        else:
-            provider = "cloudflare"  # hidden options never stay active
+        elif self.cf_radio.isChecked() or (provider == "ngrok" and not advanced):
+            provider = "cloudflare"   # hidden options never stay active
 
+        provider_changed = provider != (store.settings.get("tunnel_provider") or "cloudflare")
         store.set("advanced_link", advanced)
+        store.set("share_method", method)
         store.set("tunnel_provider", provider)
         store.set("ngrok_authtoken", self.token_edit.text().strip())
         store.set("ngrok_domain", self.domain_edit.text().strip())
+        self.main.apply_link_settings(provider_changed=provider_changed)
         self.accept()

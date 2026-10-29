@@ -2,7 +2,9 @@
 
 Guests arrive through a tunnel or the user's own reverse proxy. A one-click
 link carries the token; the bare public address shows a password door and
-plants a cookie instead, so no secret has to live in a URL.
+plants a cookie instead, so no secret has to live in a URL. Guests on the
+fixed link (fixed_link.py) arrive over iroh instead and run the same guest
+session — serve_fixed_guest.
 They only ever see the current board's controls and the values of the
 parameters on it — never the full parameter list, and the server rejects
 writes to anything that isn't a board control.
@@ -179,10 +181,14 @@ class GuestServer:
         app.router.add_get("/health", lambda r: web.json_response({"ok": True}))
         app.router.add_get("/favicon.ico",
                            lambda r: web.FileResponse(web_root() / "favicon.png"))
-        app.router.add_static("/static/", web_root(), show_index=False)
         fonts = font_root()
         if fonts.is_dir():
+            # static/fonts/ is where style.css looks (a relative path, so the
+            # fixed link's copy of the page on GitHub Pages finds them too);
+            # it has to be registered before /static/ to win the match
+            app.router.add_static("/static/fonts/", fonts, show_index=False)
             app.router.add_static("/fonts/", fonts, show_index=False)
+        app.router.add_static("/static/", web_root(), show_index=False)
         runner = web.AppRunner(app, access_log=None)
         self._runner = runner
         self.loop.run_until_complete(runner.setup())
@@ -628,22 +634,52 @@ class GuestServer:
             await ws.send_json({"t": "denied"})
             await ws.close()
             return ws
+        await self._serve_guest(ws, request.query.get("n", ""))
+        return ws
 
+    async def serve_fixed_guest(self, sock, join: dict, peer: str) -> None:
+        """A browser on the fixed link (fixed_link.py), past its handshake:
+        `join` carries the token and name a websocket guest has in its URL.
+        `sock` talks like a websocket, so the session is the same code."""
+        who = f"iroh:{peer[:16]}"
+        why = ""
+        if self._blocked(who):
+            why = "link"
+        elif not _tokens_match(str(join.get("k") or ""), self.core.guest_token()):
+            self._note_auth_fail(who, "fixed link")
+            why = "link"   # a link from before the last Reset link
+        elif len(self._sockets) >= MAX_GUESTS:
+            why = "full"
+        if why:
+            try:
+                await sock.send_json({"t": "denied", "why": why})
+            except Exception:
+                pass
+            await sock.close(5, f"denied {why}".encode())
+            return
+        self._fails.pop(who, None)
+        log.info("guest joined over the fixed link (%s)", peer[:8])
+        await self._serve_guest(sock, str(join.get("n") or ""))
+
+    async def _serve_guest(self, ws, name: str) -> None:
+        """One guest's session, once let in — a websocket, or a fixed-link
+        stream that behaves like one."""
         # Guests stay connected even while paused — they just see a "paused"
         # overlay and their inputs are ignored server-side until resume.
         self._sockets.add(ws)
         self._guest_seq += 1
         self._ids[ws] = self._guest_seq
-        self._names[ws] = _clean_name(request.query.get("n", ""))
+        self._names[ws] = _clean_name(name)
         self._notify_guests()
         payload = self._hello_payload()
         if (self.core.store.settings.get("require_guest_names")
                 and not self._names[ws]):
             payload["need_name"] = True
-        await ws.send_json(payload)
 
         allowance, last = GUEST_MSGS_PER_SEC, time.monotonic()
         try:
+            # inside the try: a guest gone before its hello must not stay listed
+            await ws.send_json(payload)
             async for msg in ws:
                 if msg.type != WSMsgType.TEXT:
                     continue
@@ -656,6 +692,8 @@ class GuestServer:
                 try:
                     data = json.loads(msg.data, parse_constant=_no_constants)
                 except ValueError:
+                    continue
+                if not isinstance(data, dict):
                     continue
                 if data.get("t") == "name":  # guest set/changed their display name
                     self._names[ws] = _clean_name(data.get("name", ""))
@@ -675,7 +713,6 @@ class GuestServer:
             self._names.pop(ws, None)
             self._ids.pop(ws, None)
             self._notify_guests()
-        return ws
 
     def _notify_guests(self) -> None:
         # one entry per guest, in connect order; unnamed guests get a stable tag
@@ -694,14 +731,15 @@ class GuestServer:
         # structural change (values stream as deltas via the guest path).
         # The noisy events are exempt: the 10s status heartbeat and tunnel
         # chatter would each push a full snapshot -> full re-render.
-        if self._admins and event["t"] not in ("param", "vrc_status", "tunnel"):
+        if self._admins and event["t"] not in ("param", "vrc_status", "tunnel",
+                                               "fixed_link"):
             self.loop.call_soon_threadsafe(self._schedule_admin)
         elif self._admins and event["t"] == "vrc_status":
             seen = (bool(event.get("vrchat_found")), bool(event.get("receiving")))
             if seen != self._admin_status_seen:  # a real connect/disconnect
                 self._admin_status_seen = seen
                 self.loop.call_soon_threadsafe(self._schedule_admin)
-        if event["t"] in ("vrc_status", "tunnel", "guests"):
+        if event["t"] in ("vrc_status", "tunnel", "fixed_link", "guests"):
             return
         if event["t"] == "token":  # link revoked -> drop everyone
             self.loop.call_soon_threadsafe(self._schedule, {"t": "denied"}, True)

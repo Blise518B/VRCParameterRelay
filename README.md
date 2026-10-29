@@ -25,12 +25,14 @@ forwarding, no accounts, no setup.
 - Number (Int) parameters work as toggles and hold buttons too — each one
   sets its own value (Outfit = 1, 2, 3 …) and they switch each other off,
   just like VRChat's own menu
-- **Share**: one click gives you a link; anyone with it can use your board
-  from any browser. Pause kicks guests but keeps the same link; Reset link
-  kills all old links
-- Want a link that never changes? Type your own domain into *Share → Your own
-  address* (setup guide: [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md)), or
-  put a free ngrok authtoken + static domain into *Link settings*
+- **Share**: your own fixed link — the same one every time, even after a
+  restart. Anyone with it can use your board from any browser; it connects
+  straight to your PC (peer-to-peer over [iroh](https://iroh.computer), end-to-end
+  encrypted). Pause blocks guests but keeps the link; Reset link makes a new
+  one and kicks everyone on the old one
+- Prefer a tunnel? *Link settings* still has the Cloudflare quick tunnel and
+  a free ngrok static domain. Or type your own domain into *Share → Your own
+  address* (setup guide: [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md))
 - **⚡ YOLO mode**: guests get all parameters, not just your board
 
 ## Quick start
@@ -49,8 +51,10 @@ unsigned exe — *More info → Run anyway*.
 
 - Settings and boards live in `%APPDATA%\VRCParameterRelay`
 - The app has to run on the same PC as VRChat
-- Quick-tunnel links change when you restart the app — use your own address
-  or the ngrok option for a permanent one
+- The fixed link works while the app is running and sharing; when it's
+  closed, the page waits and connects by itself once you're back
+- Cloudflare quick-tunnel links (Link settings) change when you restart the
+  app; the fixed link doesn't
 - On Linux, use the AppImage from Releases
 
 ## From source

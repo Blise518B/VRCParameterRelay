@@ -168,13 +168,14 @@ def main() -> None:
     from vrc_parameter_relay.ui.main_window import MainWindow
 
     qapp = QApplication.instance() or QApplication([])
+    store.set("share_method", "tunnel")   # this suite is about the tunnel path
     core2 = AppCore(store, StubLink())
     tun, web2 = StubTunnel(), StubWeb()
     win = MainWindow(core2, tun, web2)
     dlg = win.share_dialog
     dlg._refresh()
-    check("fresh: field empty, tunnel hint shown",
-          dlg.own_edit.text() == "" and "free tunnel" in dlg.own_hint.text())
+    check("fresh: field empty, the hint offers the own address",
+          dlg.own_edit.text() == "" and "your own domain" in dlg.own_hint.text().lower())
     check("fresh: no password row (tunnel links carry the token)", dlg.pw_box.isHidden())
 
     win.start_sharing()

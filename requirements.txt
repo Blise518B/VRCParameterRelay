@@ -10,3 +10,8 @@ python-osc>=1.9,<2
 zeroconf>=0.150,<1
 aiohttp>=3.14.3,<4
 openvr>=1.23,<3
+# The fixed link (fixed_link.py): QUIC by public key through n0's free
+# relays. A Rust library behind a ctypes DLL — the spec collects it, or the
+# one-file exe can't find it. The browser's half (tools/web_guest) is built
+# against the iroh these bindings carry (1.2.0 = iroh 1.4.1): bump together.
+iroh>=1.2.0,<1.3

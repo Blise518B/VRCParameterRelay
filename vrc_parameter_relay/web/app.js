@@ -1,6 +1,12 @@
 "use strict";
 
 const token = new URLSearchParams(location.search).get("k") || "";
+// The fixed link (fixed_link.py): this page came from GitHub Pages with
+// #<the relay's iroh endpoint id>.<token> and dials the relay over iroh in
+// WebAssembly (tools/web_guest) instead of a websocket to whoever served it.
+// Everything after the # stays in the browser; the token only travels inside
+// the encrypted connection, to the relay.
+const fixed = parseFixed(location.hash);
 const boardEl = document.getElementById("board");
 const dotEl = document.getElementById("statusDot");
 const statusEl = document.getElementById("statusText");
@@ -46,7 +52,112 @@ function bouncedOnce() {
   } catch (e) { return true; }
 }
 
+function parseFixed(hash) {
+  const m = /^#([0-9a-f]{64})\.([0-9a-f]{16,64})$/i.exec(hash || "");
+  return m ? { id: m[1].toLowerCase(), token: m[2].toLowerCase() } : null;
+}
+
+// -- the fixed link's transport ---------------------------------------------
+// FixedSocket looks like the WebSocket the rest of this file uses (readyState,
+// send, close, onopen/onmessage/onclose), but underneath it is one iroh
+// connection with one stream of length-prefixed JSON frames. The first frame
+// is a join with the token and name a websocket carries in its URL.
+const FIXED_ALPN = "vrcpr/guest/1";
+const utf8in = new TextDecoder();
+const utf8out = new TextEncoder();
+let irohGuest = null;          // this page's iroh endpoint, made once
+let fixedEverOpen = false;     // has the relay ever answered this page?
+
+class FixedSocket {
+  constructor() {
+    this.readyState = WebSocket.CONNECTING;
+    this.onopen = this.onmessage = this.onclose = null;
+    this.reason = "";          // why it ended (the relay's close reason)
+    this.opened = false;
+    this.pipe = null;
+    this.queue = Promise.resolve();
+    this.run();
+  }
+
+  async run() {
+    try {
+      if (!irohGuest) {
+        const mod = await import("./web_guest/vrcpr_web_guest.js");
+        await mod.default();
+        irohGuest = await mod.Guest.spawn(crypto.getRandomValues(new Uint8Array(32)));
+      }
+      const pipe = await irohGuest.dial(fixed.id, FIXED_ALPN);
+      if (this.readyState === WebSocket.CLOSED) { pipe.close(0, "bye"); return; }
+      this.pipe = pipe;
+      this.readyState = WebSocket.OPEN;
+      this.opened = fixedEverOpen = true;
+      this.write(JSON.stringify({ t: "join", k: fixed.token, n: guestName, v: 1 }));
+      if (this.onopen) this.onopen();
+      for (;;) {
+        const data = await pipe.recv();
+        if (this.onmessage) this.onmessage({ data: utf8in.decode(data) });
+      }
+    } catch (e) {
+      this.reason = String((e && e.message) || e);
+    }
+    this.ended();
+  }
+
+  write(text) {
+    // one after another, so frames never interleave
+    this.queue = this.queue.then(() => this.pipe.send(utf8out.encode(text)))
+      .catch(() => {});
+  }
+
+  send(text) {
+    if (this.readyState === WebSocket.OPEN) this.write(text);
+  }
+
+  close() {
+    if (this.readyState === WebSocket.CLOSED) return;
+    this.readyState = WebSocket.CLOSED;
+    if (this.pipe) this.pipe.close(0, "bye");
+  }
+
+  ended() {
+    const wasClosed = this.readyState === WebSocket.CLOSED;
+    this.readyState = WebSocket.CLOSED;
+    if (!wasClosed && this.onclose) this.onclose();
+  }
+}
+
+function connectFixed() {
+  if (!fixedEverOpen) setStatus(false, "connecting to the host…");
+  ws = new FixedSocket();
+  ws.onopen = () => { retryMs = 1000; setStatus(true, "connected"); };
+  ws.onmessage = onMessage;
+  ws.onclose = () => {
+    const why = ws.reason;
+    if (/denied link/.test(why)) { linkRevoked(); return; }
+    if (/denied full/.test(why)) { boardFull(); return; }
+    // never reached: the host isn't sharing right now (or the app is closed);
+    // a link that worked before: it dropped, or the host stopped
+    setStatus(false, ws.opened ? "reconnecting…"
+      : (fixedEverOpen ? "the host stopped sharing — waiting…"
+        : "waiting for the host to start sharing…"));
+    setTimeout(connect, retryMs);
+    retryMs = Math.min(retryMs * 1.6, 15000);
+  };
+}
+
+function linkRevoked() {
+  setStatus(false, "link reset");
+  showOverlay("This link doesn't work any more — the host made a new one. "
+    + "Ask them for the current link.");
+}
+
+function boardFull() {
+  showOverlay("The board is full right now. Trying again in a moment…");
+  setTimeout(() => { hideOverlay(); connect(); }, 15000);
+}
+
 function connect() {
+  if (fixed) { connectFixed(); return; }
   const proto = location.protocol === "https:" ? "wss" : "ws";
   // The token rides in the URL only on a one-click link (the server plants
   // a cookie and bounces the browser to the bare address on arrival). A
@@ -55,73 +166,77 @@ function connect() {
     + (token ? `&k=${encodeURIComponent(token)}` : ""));
 
   ws.onopen = () => { retryMs = 1000; setStatus(true, "connected"); };
-
-  ws.onmessage = (ev) => {
-    const msg = JSON.parse(ev.data);
-    switch (msg.t) {
-      case "style":
-        applyStyle(msg);
-        break;
-      case "hello":
-      case "resumed":
-      case "avatar":
-      case "board":
-        board = msg.board;
-        values = msg.values || {};
-        if (msg.style) applyStyle(msg.style);
-        if (msg.t === "hello" || msg.t === "resumed") {
-          yoloOn = !!msg.yolo;
-          setPaused(!!msg.paused);
-          try { sessionStorage.removeItem("vrcpr_bounced"); } catch (e) {}
-        }
-        if (msg.t === "resumed") setPaused(false);
-        if (msg.need_name) showNameGate();
-        if (msg.params) allParams = msg.params;
-        render();
-        break;
-      case "need_name":
-        if (msg.enabled === false) hideNameGate();
-        else showNameGate();
-        break;
-      case "yolo":
-        yoloOn = !!msg.enabled;
-        allParams = msg.params || {};
-        render();
-        break;
-      case "params":
-        allParams = msg.params || {};
-        render();
-        break;
-      case "param":
-        applyParam(msg.name, msg.value, msg.ptype);
-        break;
-      case "param_batch":  // 50ms server-side batches
-        for (const [name, [value, ptype]] of Object.entries(msg.params)) {
-          applyParam(name, value, ptype);
-        }
-        break;
-      case "paused":
-        setPaused(true);
-        break;
-      case "denied":
-        ws.onclose = null;
-        ws.close();
-        // A stale cookie (the host rotated the token) or a dead one-click
-        // link: send the browser to the bare address, where the password
-        // door lives. Once only — a full board also refuses, and that must
-        // not bounce forever.
-        if (!bouncedOnce()) { location.replace("/"); return; }
-        showOverlay("This remote link is invalid or has been revoked by the host — "
-          + "or the board is full. Ask the host for the current password.");
-        return;
-    }
-  };
-
+  ws.onmessage = onMessage;
   ws.onclose = () => {
     setStatus(false, "reconnecting…");
     setTimeout(connect, retryMs);
     retryMs = Math.min(retryMs * 1.6, 15000);
   };
+}
+
+function onMessage(ev) {
+  const msg = JSON.parse(ev.data);
+  switch (msg.t) {
+    case "style":
+      applyStyle(msg);
+      break;
+    case "hello":
+    case "resumed":
+    case "avatar":
+    case "board":
+      board = msg.board;
+      values = msg.values || {};
+      if (msg.style) applyStyle(msg.style);
+      if (msg.t === "hello" || msg.t === "resumed") {
+        yoloOn = !!msg.yolo;
+        setPaused(!!msg.paused);
+        try { sessionStorage.removeItem("vrcpr_bounced"); } catch (e) {}
+      }
+      if (msg.t === "resumed") setPaused(false);
+      if (msg.need_name) showNameGate();
+      if (msg.params) allParams = msg.params;
+      render();
+      break;
+    case "need_name":
+      if (msg.enabled === false) hideNameGate();
+      else showNameGate();
+      break;
+    case "yolo":
+      yoloOn = !!msg.enabled;
+      allParams = msg.params || {};
+      render();
+      break;
+    case "params":
+      allParams = msg.params || {};
+      render();
+      break;
+    case "param":
+      applyParam(msg.name, msg.value, msg.ptype);
+      break;
+    case "param_batch":  // 50ms server-side batches
+      for (const [name, [value, ptype]] of Object.entries(msg.params)) {
+        applyParam(name, value, ptype);
+      }
+      break;
+    case "paused":
+      setPaused(true);
+      break;
+    case "denied":
+      ws.onclose = null;
+      ws.close();
+      if (fixed) {   // the relay says which: a reset link, or a full board
+        if (msg.why === "full") boardFull(); else linkRevoked();
+        return;
+      }
+      // A stale cookie (the host rotated the token) or a dead one-click
+      // link: send the browser to the bare address, where the password
+      // door lives. Once only — a full board also refuses, and that must
+      // not bounce forever.
+      if (!bouncedOnce()) { location.replace("/"); return; }
+      showOverlay("This remote link is invalid or has been revoked by the host — "
+        + "or the board is full. Ask the host for the current password.");
+      return;
+  }
 }
 
 function applyParam(name, value, ptype) {

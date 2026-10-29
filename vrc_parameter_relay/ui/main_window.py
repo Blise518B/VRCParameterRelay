@@ -21,12 +21,15 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__, resource_path
+from ..fixed_link import FixedLink
 from ..webserver import compose_public_url, normalize_public_url
 from .dialogs import ControlDialog, ShareDialog
 from .theme import (
     DEFAULT_FONT, DEFAULT_THEME, FONT_GROUPS, THEME_LABELS, THEME_ORDER,
     accent_of, build_qss,
 )
+from .whats_new import WhatsNewDialog
+from .whats_new import should_show as whats_new_due
 from .widgets import CategoryBox, ControlCard, ParamTree, drag_ghost
 
 RELEASES_URL = f"{GITHUB_URL}/VRCParameterRelay/releases"
@@ -101,11 +104,13 @@ class MainWindow(QMainWindow):
     update_found = Signal(str)   # newer version tag available on GitHub
     activate_requested = Signal()  # another start was attempted (from a thread)
 
-    def __init__(self, core, tunnel, web) -> None:
+    def __init__(self, core, tunnel, web, fixed=None) -> None:
         super().__init__()
         self.core = core
         self.tunnel = tunnel
         self.web = web
+        # the fixed link — made here when the caller has none (tests)
+        self.fixed = fixed if fixed is not None else FixedLink(core.store, web)
         self.cards: dict[str, ControlCard] = {}      # control id -> card
         self.param_items: dict[str, QTreeWidgetItem] = {}
         self.guest_count = 0
@@ -118,6 +123,7 @@ class MainWindow(QMainWindow):
         self.bridge.event.connect(self._on_event)
         core.add_listener(self.bridge.event.emit)
         tunnel.on_change = lambda st: core.emit({"t": "tunnel", **st})
+        self.fixed.on_change = lambda st: core.emit({"t": "fixed_link", **st})
 
         self._build_header()
         self._build_board_area()
@@ -146,6 +152,7 @@ class MainWindow(QMainWindow):
         self._rebuild_board()
         self._refresh_params(core.param_snapshot())
         self._refresh_pause_btn()
+        self._whats_new_checked = False  # shown on the window's first appearance
         self._start_update_check()
 
     # -- system tray -------------------------------------------------------------
@@ -209,10 +216,14 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl(self.share_dialog.admin_url()))
 
     def current_share_url(self) -> str:
-        """The link guests should use right now (own address, tunnel or local)."""
+        """The link guests should use right now (own address, fixed link,
+        tunnel or local)."""
         token = self.core.guest_token()
-        if self.own_address_active():
+        method = self.share_method()
+        if method == "own":
             return compose_public_url(self.own_address(), token)
+        if method == "fixed" and self.fixed.url():
+            return self.fixed.url()   # the same before and after it is up
         if self.tunnel.state == "online" and self.tunnel.url:
             return f"{self.tunnel.url}/?k={token}"
         port = self.web.port or self.web.requested_port
@@ -239,6 +250,19 @@ class MainWindow(QMainWindow):
             self.resize(*self.DEFAULT_SIZE)
         if self.core.store.settings.get("window_maximized"):
             self.setWindowState(Qt.WindowMaximized)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # after an update, the first time the window shows (a start in the
+        # tray waits until it is opened): what changed, once
+        if not self._whats_new_checked:
+            self._whats_new_checked = True
+            if whats_new_due(self.core.store.settings):
+                QTimer.singleShot(500, self._show_whats_new)
+
+    def _show_whats_new(self) -> None:
+        self.core.store.set("last_seen_version", __version__)
+        WhatsNewDialog(self).exec()
 
     def closeEvent(self, event) -> None:
         size = self.normalGeometry().size()  # pre-maximize size, not the screen's
@@ -523,7 +547,7 @@ class MainWindow(QMainWindow):
             self._rebuild_board()
         elif t == "vrc_status":
             self._update_vrc_chip(event)
-        elif t == "tunnel":
+        elif t in ("tunnel", "fixed_link"):
             self.share_dialog.update_tunnel(event)
             self._refresh_pause_btn()
         elif t == "guests":
@@ -886,18 +910,35 @@ class MainWindow(QMainWindow):
         menu.exec(self.guest_chip.mapToGlobal(self.guest_chip.rect().bottomLeft()))
 
     def own_address(self) -> str:
-        """The user's own address from the Share window ("" = use a tunnel)."""
+        """The user's own address from the Share window ("" = none)."""
         return self.core.store.settings.get("public_url") or ""
 
     def own_address_active(self) -> bool:
         return bool(self.own_address())
 
+    def share_method(self) -> str:
+        """What carries the link: "own" (your own address), "fixed" (the
+        fixed link) or "tunnel" (Cloudflare / ngrok, from Link settings)."""
+        if self.own_address_active():
+            return "own"
+        return "tunnel" if self.core.store.settings.get("share_method") == "tunnel" else "fixed"
+
+    def _start_link(self) -> None:
+        """Bring up whatever carries the link now (an own address has
+        nothing to start)."""
+        method = self.share_method()
+        if method == "fixed":
+            self.fixed.start()
+        elif method == "tunnel" and self.tunnel.state in ("off", "error"):
+            self.tunnel.start(self.web.port)
+
     def set_own_address(self, raw: str) -> str:
         """Switch sharing to (or back from) the user's own address.
 
         Applies at once: the listener opens to the LAN (or goes back to
-        loopback) and, while sharing, the tunnel stops or starts — the link
-        guests need changes with it. Returns the cleaned address.
+        loopback) and, while sharing, the fixed link or tunnel stops or
+        starts — the link guests need changes with it. Returns the cleaned
+        address.
         """
         address = normalize_public_url(raw)
         if address == self.own_address():
@@ -905,28 +946,45 @@ class MainWindow(QMainWindow):
         self.core.store.set("public_url", address)
         self.web.rebind()   # loopback <-> every interface
         if address:
-            self.tunnel.stop()  # the own address replaces the tunnel link
+            # the own address replaces the other links
+            self.tunnel.stop()
+            self.fixed.stop()
         elif self.core.sharing_enabled and self.web.port:
-            self.tunnel.start(self.web.port)
+            self._start_link()
         self.share_dialog.refresh_state()
         self._refresh_pause_btn()
         return address
 
+    def apply_link_settings(self, provider_changed: bool = False) -> None:
+        """Link settings were saved: switch what carries the link right
+        away, so the link in the Share window is the one that works."""
+        method = self.share_method()
+        if method != "fixed":
+            self.fixed.stop()
+        if method != "tunnel":
+            self.tunnel.stop()
+        elif provider_changed and self.tunnel.state != "off":
+            self.tunnel.stop()   # Cloudflare <-> ngrok: a different link
+        if self.core.sharing_enabled and self.web.port:
+            self._start_link()
+        self.share_dialog.refresh_state()
+        self._refresh_pause_btn()
+
     def start_sharing(self) -> bool:
         """Same as Share -> "Start sharing": unpause AND bring the link up
-        (the tunnel — an own address has nothing to start)."""
+        (the fixed link or tunnel — an own address has nothing to start)."""
         if not self.web.port:
             return False  # web server still binding — the Share dialog says so
         self.core.set_sharing(True)
-        if not self.own_address_active() and self.tunnel.state in ("off", "error"):
-            self.tunnel.start(self.web.port)
+        self._start_link()
         return True
 
     def stop_sharing(self) -> None:
         self.core.set_sharing(False)
         if self.tunnel.state in ("downloading", "starting"):
             self.tunnel.stop()  # nothing shared yet — full cancel
-        # an online tunnel stays up so the link survives the pause
+        # an online tunnel (or the fixed link) stays up so the link survives
+        # the pause: guests see a paused board instead of an error
 
     def _toggle_pause(self) -> None:
         if self.core.sharing_enabled:
@@ -940,6 +998,7 @@ class MainWindow(QMainWindow):
         # this button must SHOW the paused state and WORK — a tray-shared link
         # used to land guests on a paused board with this button dead.
         link_up = (self.tunnel.state in ("downloading", "starting", "online")
+                   or self.fixed.state in ("starting", "online")
                    or self.own_address_active())
         if self.core.sharing_enabled:
             self.pause_btn.setText("■ STOP")  # filled red — the emergency stop
@@ -1048,20 +1107,24 @@ this avatar and controls are live; red <b>✎ OFFLINE</b> means you're only
 editing, and nothing is sent to VRChat.</p>
 
 <h2>Sharing</h2>
-<p><b>Share → Start sharing</b> creates a public link (no port forwarding —
-a Cloudflare quick tunnel; downloads itself on first use). Guests see only
-your board — in the same theme and category colours you're using — and can
+<p><b>Share</b> shows your <b>fixed link</b> — the same link every time,
+across restarts, with nothing to install and no account. <b>Start
+sharing</b> and anyone with the link can use your board from any browser:
+the page connects straight to this app (peer-to-peer through iroh's free
+relays, end-to-end encrypted — no port forwarding). Guests see only your
+board — in the same theme and category colours you're using — and can
 set a display name so you know who's connected — click
 the <b>guests</b> chip to see the list (unnamed guests show as
 <i>Anonymous&nbsp;#N</i>). The red <b>STOP</b> button above the board is an
 emergency stop: it pauses everyone instantly without disconnecting them,
-then turns into <b>RESUME</b>. <b>Reset link</b> invalidates every link you've
-handed out. Have your own domain? Type it into <b>Your own address</b> in
-the Share window and it becomes the link — the same one every session, no
-tunnel; guests type a password once. Point the domain at this PC (a
+then turns into <b>RESUME</b>. <b>Reset link</b> makes a new link and kicks
+everyone on the old one. Prefer the old way? <i>Link settings</i> switches
+to a Cloudflare quick tunnel (a new link each session) or, under
+<b>advanced settings</b>, a free permanent ngrok link. Have your own domain?
+Type it into <b>Your own address</b> in the Share window and it becomes the
+link; guests type a password once. Point the domain at this PC (a
 Cloudflare Tunnel, a reverse proxy or a port forward — the hint under the
-field says where). <i>Link settings</i> also offers a free permanent ngrok
-link under <b>advanced settings</b>. Nothing ever bills you.</p>
+field says where). Nothing ever bills you.</p>
 
 <h2>⚡ YOLO mode</h2>
 <p>The ⚡ YOLO button above the board gives guests the <i>full</i> parameter
@@ -1097,8 +1160,8 @@ window instead.</p>
 <h2>Headless mode</h2>
 <p>Start the exe with <code>--headless</code> and it runs without a window:
 it connects to VRChat, loads your saved boards and starts sharing
-automatically with whatever link you configured here (tunnel or your own
-address). Perfect for auto-starting with Windows. Progress
+automatically with whatever link you configured here (fixed link, tunnel or
+your own address). Perfect for auto-starting with Windows. Progress
 goes to the log file in the data folder; board edits made in a normally
 started window are picked up live.</p>
 
@@ -1110,7 +1173,7 @@ link — never installs anything by itself.</p>
 
 
 class HelpDialog(QDialog):
-    def __init__(self, parent: QWidget) -> None:
+    def __init__(self, parent: "MainWindow") -> None:
         super().__init__(parent)
         self.setWindowTitle(f"{APP_NAME} — Help")
         self.resize(560, 520)
@@ -1119,9 +1182,15 @@ class HelpDialog(QDialog):
         browser.setOpenExternalLinks(True)
         browser.setHtml(HELP_HTML)
         lay.addWidget(browser)
+        row = QHBoxLayout()
+        news = QPushButton("What's new")
+        news.clicked.connect(lambda: WhatsNewDialog(parent).exec())
+        row.addWidget(news)
+        row.addStretch(1)
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
-        lay.addWidget(close, alignment=Qt.AlignRight)
+        row.addWidget(close)
+        lay.addLayout(row)
 
 
 class SettingsDialog(QDialog):

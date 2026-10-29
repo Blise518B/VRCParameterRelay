@@ -9,7 +9,8 @@ from PyInstaller.utils.hooks import collect_dynamic_libs
 a = Analysis(
     ['run.py'],
     pathex=[],
-    binaries=collect_dynamic_libs('openvr'),  # openvr_api dll for SteamVR autostart
+    # openvr_api dll for SteamVR autostart; iroh_ffi for the fixed link
+    binaries=collect_dynamic_libs('openvr') + collect_dynamic_libs('iroh'),
     datas=[
         ('vrc_parameter_relay/web', 'vrc_parameter_relay/web'),
         ('vrc_parameter_relay/assets', 'vrc_parameter_relay/assets'),

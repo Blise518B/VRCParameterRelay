@@ -44,6 +44,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # as the public path, so it never reaches the admin panel.
     "trusted_proxy": "",
     "last_avatar_id": None,
+    # How the share link reaches this PC when no own address is set:
+    # "fixed" — the fixed link (fixed_link.py: iroh, the same link every
+    # session, nothing to install), the default since 1.4.0; "tunnel" — a
+    # Cloudflare quick tunnel or ngrok (tunnel_provider). Installs from
+    # before 1.4.0 keep the tunnel they had (see _load_settings).
+    "share_method": "fixed",
     "tunnel_provider": "cloudflare",  # or "ngrok" (static domain)
     "ngrok_authtoken": "",
     "ngrok_domain": "",
@@ -52,6 +58,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "yolo_enabled": False,
     "require_guest_names": False,  # guests must introduce themselves first
     "skip_update_version": "",  # release tag the user chose not to be reminded about
+    # the version whose What's new panel was shown ("" = an install from
+    # before the panel existed, so the next start shows it)
+    "last_seen_version": "",
     "window_size": None,        # [w, h] of the main window, restored on start
     "window_maximized": False,
     "theme": "neon",            # UI theme: "neon" (default) or "broker" (Midnight)
@@ -87,10 +96,25 @@ class Store:
     def _load_settings(self) -> dict[str, Any]:
         settings = dict(DEFAULT_SETTINGS)
         path = self.dir / "settings.json"
+        saved: dict[str, Any] = {}
         try:
-            settings.update(json.loads(path.read_text("utf-8")))
+            loaded = json.loads(path.read_text("utf-8"))
+            if isinstance(loaded, dict):
+                saved = loaded
         except (OSError, ValueError):
             pass  # first run or corrupt file
+        settings.update(saved)
+        #: no settings yet — a new download, not an update
+        self.fresh_install = not saved
+        if saved and "share_method" not in saved:
+            # an install from before the fixed link shared through the
+            # Cloudflare (or ngrok) tunnel: it keeps doing that until the
+            # user switches (What's new / Link settings offer it)
+            settings["share_method"] = "tunnel"
+        if self.fresh_install:
+            # nothing changed for someone who never had an older version
+            from . import __version__
+            settings["last_seen_version"] = __version__
         if not settings.get("guest_token"):
             settings["guest_token"] = new_token()
         if not settings.get("admin_token"):

@@ -1,21 +1,23 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
-/* Fonts bundled with the app and served from /fonts — guests get them even
-   though they're not installed locally. Only the chosen one is downloaded. */
+/* Fonts bundled with the app and served next to this file (static/fonts/,
+   relative so the fixed link's copy on GitHub Pages finds them too) — guests
+   get them even though they're not installed locally. Only the chosen one is
+   downloaded. */
 @font-face {
   font-family: "Orbitron";
-  src: url("/fonts/Orbitron.ttf") format("truetype");
+  src: url("fonts/Orbitron.ttf") format("truetype");
   font-weight: 400 900;
   font-display: swap;
 }
 @font-face {
   font-family: "Aldrich";
-  src: url("/fonts/Aldrich-Regular.ttf") format("truetype");
+  src: url("fonts/Aldrich-Regular.ttf") format("truetype");
   font-display: swap;
 }
 @font-face {
   font-family: "Audiowide";
-  src: url("/fonts/Audiowide-Regular.ttf") format("truetype");
+  src: url("fonts/Audiowide-Regular.ttf") format("truetype");
   font-display: swap;
 }
 

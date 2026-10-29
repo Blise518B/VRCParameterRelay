@@ -165,7 +165,9 @@ def main() -> None:
         def restart(self, port):
             self.start(port)
 
-    core2 = AppCore(Store(), StubLink())
+    store2 = Store()
+    store2.set("share_method", "tunnel")   # the tunnel path; the fixed link has its own test
+    core2 = AppCore(store2, StubLink())
     web2 = type("Web", (), {"port": 3081, "requested_port": 3081})()
     tun = StubTunnel()
     win2 = MainWindow(core2, tun, web2)
