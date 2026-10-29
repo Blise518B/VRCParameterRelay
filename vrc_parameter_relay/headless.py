@@ -3,8 +3,8 @@
 Same program, same data, same settings — just no Qt. Start the exe (or
 ``python -m vrc_parameter_relay``) with ``--headless`` and it connects to
 VRChat, loads the saved boards, starts sharing with the configured link
-provider (Cloudflare / ngrok / self-hosted + UPnP) and keeps running until
-killed. Board edits made by a parallel UI instance are picked up live via
+provider (Cloudflare / ngrok, or no tunnel at all on your own address) and
+keeps running until killed. Board edits made by a parallel UI instance are picked up live via
 the profile hot-reload poll.
 
 This module must never import Qt — that's the point.
@@ -22,7 +22,7 @@ from .core import AppCore
 from .osc_link import VrcLink
 from .store import Store
 from .tunnel import Tunnel
-from .webserver import GuestServer, compose_selfhost_url, lan_ip
+from .webserver import GuestServer, compose_public_url, lan_ip
 
 log = logging.getLogger(__name__)
 
@@ -57,22 +57,10 @@ class HeadlessApp:
         if kind == "guests":
             log.info("guests: %d %s", event["count"],
                      ", ".join(event.get("names") or []))
-        elif kind == "upnp":
-            if event.get("ok"):
-                log.info("UPnP: port %s opened (public IP %s)",
-                         event.get("port"), event.get("info") or "?")
-            else:
-                log.warning("UPnP failed: %s — forward the port manually",
-                            event.get("info"))
         elif kind == "avatar":
             log.info("avatar: %s", self.core.avatar_name)
 
     # -- lifecycle --------------------------------------------------------------
-
-    def _selfhost(self) -> bool:
-        settings = self.store.settings
-        return bool(settings.get("advanced_link")
-                    and settings.get("tunnel_provider") == "selfhost")
 
     def start(self, *, start_link: bool = True) -> None:
         """Bring everything up and begin sharing (there's no button to press)."""
@@ -86,17 +74,18 @@ class HeadlessApp:
             raise RuntimeError("guest web server failed to start")
 
         self.core.set_sharing(True)
-        settings = self.store.settings
-        if self._selfhost():
-            url = compose_selfhost_url(
-                settings.get("selfhost_host", ""),
-                settings.get("selfhost_port") or settings.get("web_port"),
-                self.core.guest_token())
-            log.info("SHARE LINK (self-hosted): %s",
-                     url or "NOT CONFIGURED — set a public address in the UI first")
-            if settings.get("selfhost_upnp"):
-                from .upnp import map_async
-                map_async(settings, self.web.port, self.core.emit)
+        url = compose_public_url(self.store.settings.get("public_url") or "",
+                                 self.core.guest_token())
+        if url:
+            address = url.rsplit("/?k=", 1)[0]
+            # the address carries no secret: hand out THIS plus the password
+            log.info("SHARE ADDRESS (your own): %s   password: %s",
+                     address, self.core.share_password())
+            log.info("  one-click link (skips the password — a secret while "
+                     "shared): %s", url)
+            if address.startswith("http://"):
+                log.warning("own address is plain http:// — the password "
+                            "crosses the internet unencrypted")
         else:
             self.tunnel.start(self.web.port)
         log.info("local test link: http://127.0.0.1:%d/?k=%s",
@@ -106,9 +95,12 @@ class HeadlessApp:
             log.info("on this network:  http://%s:%d/?k=%s",
                      ip, self.web.port, self.core.guest_token())
         if self.store.settings.get("admin_enabled", True):
+            scope = ("reachable with the admin link from anywhere (admin_public "
+                     "is ON)" if self.store.settings.get("admin_public")
+                     else "LAN/loopback only — the public link can't reach it")
             log.info("ADMIN PANEL:    http://127.0.0.1:%d/admin?k=%s   "
-                     "(full control — do not share)",
-                     self.web.port, self.core.admin_token())
+                     "(full control — do not share; %s)",
+                     self.web.port, self.core.admin_token(), scope)
         if self.core.yolo_enabled:
             log.warning("YOLO mode is ON (persisted setting) — guests control "
                         "every parameter")
@@ -127,8 +119,6 @@ class HeadlessApp:
         log.info("shutting down…")
         self.tunnel.stop()
         self.link.stop()
-        from .upnp import cleanup_mappings
-        cleanup_mappings()
         if self.guard is not None:
             self.guard.release()
 

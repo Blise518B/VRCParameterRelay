@@ -1,19 +1,25 @@
 """Hermetic test of headless mode — no Qt, no mDNS, no tunnels.
 
 Covers: the headless module staying Qt-free, startup with sharing enabled
-(self-host branch, no tunnel spawn), the profile hot-reload poll, and a
+(own-address branch, no tunnel spawn), the profile hot-reload poll, and a
 clean shutdown. Safe to run while VRChat is open. Exits 0 on success.
+
+Runs against a throwaway data dir: this test points sharing at an own
+address, and doing that in the real settings file left the installed app
+pointed at test.example.org afterwards.
 """
 from __future__ import annotations
 
 import json
 import os
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+os.environ["VRC_PARAMETER_RELAY_DATA_DIR"] = tempfile.mkdtemp(prefix="vrcpr-headless-")
 
 
 def check(desc: str, cond: bool) -> None:
@@ -29,11 +35,8 @@ def main() -> None:
 
     from vrc_parameter_relay.store import Store
     store = Store()
-    # self-host mode so start() never spawns a tunnel binary
-    store.set("advanced_link", True)
-    store.set("tunnel_provider", "selfhost")
-    store.set("selfhost_host", "test.example.org")
-    store.set("selfhost_upnp", False)
+    # an own address so start() never spawns a tunnel binary
+    store.set("public_url", "https://test.example.org")
 
     app = HeadlessApp(store)
     check("app builds without Qt", "PySide6" not in sys.modules)
@@ -42,7 +45,7 @@ def main() -> None:
     app.start(start_link=False)
     check("web server up", bool(app.web.port))
     check("sharing auto-enabled", app.core.sharing_enabled is True)
-    check("selfhost bind on all interfaces (dual-stack)", app.web.bind_host == "*")
+    check("own address binds on all interfaces (dual-stack)", app.web.bind_host == "*")
     check("no tunnel started", app.tunnel.state == "off")
     with urllib.request.urlopen(
             f"http://127.0.0.1:{app.web.port}/health", timeout=3) as res:

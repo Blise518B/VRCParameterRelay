@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 import threading
 import urllib.request
+from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QSize, QStandardPaths, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
@@ -19,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__, resource_path
-from ..webserver import compose_selfhost_url
+from ..webserver import compose_public_url, normalize_public_url
 from .dialogs import ControlDialog, ShareDialog
 from .theme import (
     DEFAULT_FONT, DEFAULT_THEME, FONT_GROUPS, THEME_LABELS, THEME_ORDER,
@@ -29,6 +31,48 @@ from .widgets import CategoryBox, ControlCard, ParamTree, drag_ghost
 
 RELEASES_URL = f"{GITHUB_URL}/VRCParameterRelay/releases"
 LATEST_API = "https://api.github.com/repos/Blise518B/VRCParameterRelay/releases/latest"
+
+
+def pick_update_asset(assets: list, platform: Optional[str] = None) -> Optional[dict]:
+    """The one release download that fits this OS, or None (-> releases page).
+
+    Windows ships a stable `…-Windows.exe`; Linux ships a versioned
+    `….AppImage` (whose `.zsync` sidecar must not match).
+    """
+    plat = platform or sys.platform
+    suffix = ".exe" if plat.startswith("win") else (
+        ".appimage" if plat.startswith("linux") else None)
+    if suffix:
+        for asset in assets or []:
+            if str(asset.get("name", "")).lower().endswith(suffix):
+                return asset
+    return None
+
+
+def _download_dir() -> Path:
+    loc = QStandardPaths.writableLocation(QStandardPaths.DownloadLocation)
+    path = Path(loc) if loc else Path.home() / "Downloads"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _unique_path(folder: Path, name: str) -> Path:
+    """`name`, or `name (2)` etc. — never overwrite an earlier download."""
+    path = folder / name
+    stem, dot, ext = name.rpartition(".")
+    n = 2
+    while path.exists():
+        path = folder / (f"{stem} ({n}).{ext}" if dot else f"{name} ({n})")
+        n += 1
+    return path
+
+
+def _reveal_file(path: Path) -> None:
+    """Show the finished download: select it in Explorer / open its folder."""
+    if sys.platform.startswith("win"):
+        subprocess.Popen(["explorer", f"/select,{path}"])
+    else:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
 
 
 class CoreBridge(QObject):
@@ -80,8 +124,11 @@ class MainWindow(QMainWindow):
         self._build_params_dock()
         self.share_dialog = ShareDialog(self)
         self.statusBar().showMessage("Starting…")
+        self._latest_assets: list = []  # release downloads, set by the update check
+        self._update_tag = ""
         self.update_label = QLabel()
-        self.update_label.setOpenExternalLinks(True)
+        self.update_label.setOpenExternalLinks(False)
+        self.update_label.linkActivated.connect(self._update_link_clicked)
         self.update_label.setVisible(False)
         self.statusBar().addWidget(self.update_label)
 
@@ -118,6 +165,7 @@ class MainWindow(QMainWindow):
                                                      self._toggle_pause)
         self._tray_menu.addAction("Copy share link", self._tray_copy_link)
         self._tray_menu.addAction("Open board in browser", self._tray_open_browser)
+        self._tray_menu.addAction("Open admin panel", self._tray_open_admin)
         self._tray_menu.addSeparator()
         self._tray_menu.addAction("Quit", self.quit_app)
         self.tray.setContextMenu(self._tray_menu)
@@ -137,8 +185,18 @@ class MainWindow(QMainWindow):
         if url:
             QGuiApplication.clipboard().setText(url)
             if self.tray:
-                self.tray.showMessage(APP_NAME, "Share link copied.",
-                                      QSystemTrayIcon.Information, 2000)
+                if self.core.sharing_enabled:
+                    self.tray.showMessage(APP_NAME, "Share link copied.",
+                                          QSystemTrayIcon.Information, 2000)
+                else:
+                    # be honest about what the guest will see — a silently
+                    # paused board looks like the app is broken
+                    self.tray.showMessage(
+                        APP_NAME,
+                        "Share link copied — sharing is PAUSED, so guests "
+                        "only see a paused board. Pick “Start/Resume "
+                        "sharing” here (or ▶ in the app) to go live.",
+                        QSystemTrayIcon.Warning, 4000)
 
     def _tray_open_browser(self) -> None:
         """Open the guest board here — the tray equivalent of the window."""
@@ -146,16 +204,15 @@ class MainWindow(QMainWindow):
         if url:
             QDesktopServices.openUrl(QUrl(url))
 
+    def _tray_open_admin(self) -> None:
+        """Open the admin web panel — full board editing without the window."""
+        QDesktopServices.openUrl(QUrl(self.share_dialog.admin_url()))
+
     def current_share_url(self) -> str:
-        """The link guests should use right now (tunnel, self-host or local)."""
+        """The link guests should use right now (own address, tunnel or local)."""
         token = self.core.guest_token()
-        if self.selfhost_active():
-            settings = self.core.store.settings
-            url = compose_selfhost_url(
-                settings.get("selfhost_host", ""),
-                settings.get("selfhost_port") or settings.get("web_port"), token)
-            if url:
-                return url
+        if self.own_address_active():
+            return compose_public_url(self.own_address(), token)
         if self.tunnel.state == "online" and self.tunnel.url:
             return f"{self.tunnel.url}/?k={token}"
         port = self.web.port or self.web.requested_port
@@ -482,8 +539,6 @@ class MainWindow(QMainWindow):
         elif t == "sharing":
             self.share_dialog.refresh_state()
             self._refresh_pause_btn()
-        elif t == "upnp":
-            self.share_dialog.set_upnp_status(event)
         elif t == "yolo":
             self.yolo_btn.blockSignals(True)
             self.yolo_btn.setChecked(event["enabled"])
@@ -706,7 +761,11 @@ class MainWindow(QMainWindow):
         control = next((c for c in self.core.board["controls"] if c["id"] == control_id), None)
         if not control:
             return
-        dlg = ControlDialog(self, control["param"], control["ptype"], existing=control)
+        # offer what fits the parameter as VRChat reports it NOW — an avatar
+        # update may have turned a Bool into an Int since the card was made
+        ptype = self.core.param_type(control["param"]) or control["ptype"]
+        dlg = ControlDialog(self, control["param"], ptype, existing=control,
+                            suggested_on=self.core.next_on_value(control["param"], control_id))
         if dlg.exec() == QDialog.Accepted:
             self.core.update_control(control_id, **dlg.result_dict())
 
@@ -780,21 +839,33 @@ class MainWindow(QMainWindow):
                 LATEST_API, headers={"Accept": "application/vnd.github+json",
                                      "User-Agent": "VRCParameterRelay"})
             with urllib.request.urlopen(req, timeout=6) as res:
-                tag = json.loads(res.read().decode("utf-8")).get("tag_name", "")
+                release = json.loads(res.read().decode("utf-8"))
+                tag = release.get("tag_name", "")
         except Exception:
             return  # offline / rate-limited / API down — silently skip
         if tag and _is_newer(tag, __version__):
+            # remember the downloads so the dialog can grab the right one
+            self._latest_assets = [
+                {"name": a.get("name", ""), "url": a.get("browser_download_url", "")}
+                for a in release.get("assets", []) if a.get("browser_download_url")]
             self.update_found.emit(tag)
 
     def _show_update(self, tag: str) -> None:
         # user chose to stay on their version and silence reminders for this one
         if self.core.store.settings.get("skip_update_version") == tag:
             return
+        self._update_tag = tag
         self.update_label.setText(
-            f'<a href="{RELEASES_URL}" style="color:#facc15; text-decoration:none;">'
+            '<a href="#" style="color:#facc15; text-decoration:none;">'
             f'⬆ Update available: {tag} — get it here</a>')
         self.update_label.setVisible(True)
         UpdateDialog(self, tag).exec()
+
+    def _update_link_clicked(self, _href: str) -> None:
+        if self._update_tag:  # reopen the dialog: it knows the right download
+            UpdateDialog(self, self._update_tag).exec()
+        else:
+            self.open_releases()
 
     def open_releases(self) -> None:
         QDesktopServices.openUrl(QUrl(RELEASES_URL))
@@ -814,47 +885,83 @@ class MainWindow(QMainWindow):
                 menu.addAction(name)
         menu.exec(self.guest_chip.mapToGlobal(self.guest_chip.rect().bottomLeft()))
 
-    def selfhost_active(self) -> bool:
-        """True when advanced settings put sharing in self-hosted (no-tunnel) mode."""
-        settings = self.core.store.settings
-        return bool(settings.get("advanced_link")
-                    and settings.get("tunnel_provider") == "selfhost")
+    def own_address(self) -> str:
+        """The user's own address from the Share window ("" = use a tunnel)."""
+        return self.core.store.settings.get("public_url") or ""
+
+    def own_address_active(self) -> bool:
+        return bool(self.own_address())
+
+    def set_own_address(self, raw: str) -> str:
+        """Switch sharing to (or back from) the user's own address.
+
+        Applies at once: the listener opens to the LAN (or goes back to
+        loopback) and, while sharing, the tunnel stops or starts — the link
+        guests need changes with it. Returns the cleaned address.
+        """
+        address = normalize_public_url(raw)
+        if address == self.own_address():
+            return address
+        self.core.store.set("public_url", address)
+        self.web.rebind()   # loopback <-> every interface
+        if address:
+            self.tunnel.stop()  # the own address replaces the tunnel link
+        elif self.core.sharing_enabled and self.web.port:
+            self.tunnel.start(self.web.port)
+        self.share_dialog.refresh_state()
+        self._refresh_pause_btn()
+        return address
+
+    def start_sharing(self) -> bool:
+        """Same as Share -> "Start sharing": unpause AND bring the link up
+        (the tunnel — an own address has nothing to start)."""
+        if not self.web.port:
+            return False  # web server still binding — the Share dialog says so
+        self.core.set_sharing(True)
+        if not self.own_address_active() and self.tunnel.state in ("off", "error"):
+            self.tunnel.start(self.web.port)
+        return True
+
+    def stop_sharing(self) -> None:
+        self.core.set_sharing(False)
+        if self.tunnel.state in ("downloading", "starting"):
+            self.tunnel.stop()  # nothing shared yet — full cancel
+        # an online tunnel stays up so the link survives the pause
 
     def _toggle_pause(self) -> None:
         if self.core.sharing_enabled:
-            self.core.set_sharing(False)   # emergency stop — guests stay connected
-        elif (self.tunnel.state in ("downloading", "starting", "online")
-                or self.selfhost_active()):
-            self.core.set_sharing(True)
+            self.stop_sharing()   # emergency stop — guests stay connected
         else:
-            self._open_share()             # nothing to pause — offer to start
+            self.start_sharing()
 
     def _refresh_pause_btn(self) -> None:
-        # self-hosted mode has no tunnel: the address is always reachable,
-        # so pausing/resuming is available whenever sharing has a link
-        tunnel_up = (self.tunnel.state in ("downloading", "starting", "online")
-                     or self.selfhost_active())
+        # Sharing is a plain on/off gate. The local link always exists and the
+        # tray hands it out even before any tunnel runs, so when sharing is off
+        # this button must SHOW the paused state and WORK — a tray-shared link
+        # used to land guests on a paused board with this button dead.
+        link_up = (self.tunnel.state in ("downloading", "starting", "online")
+                   or self.own_address_active())
         if self.core.sharing_enabled:
             self.pause_btn.setText("■ STOP")  # filled red — the emergency stop
             self.pause_btn.setProperty("state", "active")
             self.pause_btn.setToolTip(
                 "Emergency stop — pause sharing.\n"
                 "Guests stay connected but all their input is blocked.")
-        elif tunnel_up:
-            self.pause_btn.setText("▶ RESUME")
-            self.pause_btn.setProperty("state", "paused")
-            self.pause_btn.setToolTip("Sharing is paused — click to resume")
         else:
-            self.pause_btn.setText("■ STOP")
-            self.pause_btn.setProperty("state", "")
-            self.pause_btn.setToolTip("Sharing is off")
-        self.pause_btn.setEnabled(self.core.sharing_enabled or tunnel_up)
+            self.pause_btn.setText("▶ RESUME" if link_up else "▶ START")
+            self.pause_btn.setProperty("state", "paused")
+            self.pause_btn.setToolTip(
+                "Sharing is paused — anyone opening a link sees a paused "
+                "board.\nClick to " + ("resume" if link_up else
+                                       "start sharing (same as Share → Start)"))
+        self.pause_btn.setEnabled(True)
         self.pause_btn.style().unpolish(self.pause_btn)
         self.pause_btn.style().polish(self.pause_btn)
         if self.tray is not None:
-            self._tray_pause.setText("Pause sharing" if self.core.sharing_enabled
-                                     else "Resume sharing")
-            self._tray_pause.setEnabled(self.core.sharing_enabled or tunnel_up)
+            self._tray_pause.setText(
+                "Pause sharing" if self.core.sharing_enabled
+                else ("Resume sharing" if link_up else "Start sharing"))
+            self._tray_pause.setEnabled(True)
 
     # -- settings / theme + font ----------------------------------------------------
 
@@ -918,6 +1025,11 @@ panel (open/close with the green pull-tab). <b>Double-click</b> a parameter or
 <b>drag it onto a category</b> to make a control — the type is picked
 automatically, and you can fine-tune it via the card's ⋯ → Edit (label,
 range, invert ⇄ for backwards logic).</p>
+<p><b>Number parameters as toggles:</b> many avatars switch outfits with one
+Int (Outfit&nbsp;=&nbsp;1, 2, 3 …) instead of separate on/off switches. Pick
+<i>Toggle switch</i> or <i>Hold button</i> for an Int and set its value — the
+card shows it as <b>=2</b>. Add the parameter once per value and the toggles
+work like VRChat's own menu: switching one on turns the others off.</p>
 
 <h2>Boards, categories &amp; presets</h2>
 <p>Controls live in categories. Drag cards by their ⠿ grip to rearrange or
@@ -944,10 +1056,12 @@ the <b>guests</b> chip to see the list (unnamed guests show as
 <i>Anonymous&nbsp;#N</i>). The red <b>STOP</b> button above the board is an
 emergency stop: it pauses everyone instantly without disconnecting them,
 then turns into <b>RESUME</b>. <b>Reset link</b> invalidates every link you've
-handed out. <i>Link settings</i> hides more under <b>advanced settings</b>:
-a free permanent ngrok link, or fully <b>self-hosting</b> the guest page on
-your own port and domain/DDNS name — with optional automatic port opening
-(UPnP). Everything there is free; nothing ever bills you.</p>
+handed out. Have your own domain? Type it into <b>Your own address</b> in
+the Share window and it becomes the link — the same one every session, no
+tunnel; guests type a password once. Point the domain at this PC (a
+Cloudflare Tunnel, a reverse proxy or a port forward — the hint under the
+field says where). <i>Link settings</i> also offers a free permanent ngrok
+link under <b>advanced settings</b>. Nothing ever bills you.</p>
 
 <h2>⚡ YOLO mode</h2>
 <p>The ⚡ YOLO button above the board gives guests the <i>full</i> parameter
@@ -973,7 +1087,8 @@ anything, and this one grants full control, so keep it to yourself.
 <h2>Tray &amp; autostart</h2>
 <p>Closing the window keeps the relay running in the <b>system tray</b> —
 sharing stays up, and the tray menu has Open / Pause / Copy&nbsp;link /
-Open&nbsp;board&nbsp;in&nbsp;browser / Quit (turn this off in ⚙ Settings).
+Open&nbsp;board&nbsp;in&nbsp;browser / Open&nbsp;admin&nbsp;panel / Quit
+(turn this off in ⚙ Settings).
 There you can also enable <b>Start with Windows</b> or <b>Launch with
 SteamVR</b>, both starting minimized to the tray. <code>--tray</code>
 starts minimized manually; on systems without a tray it just opens the
@@ -982,8 +1097,8 @@ window instead.</p>
 <h2>Headless mode</h2>
 <p>Start the exe with <code>--headless</code> and it runs without a window:
 it connects to VRChat, loads your saved boards and starts sharing
-automatically with whatever link you configured here (tunnel or
-self-hosted, incl. UPnP). Perfect for auto-starting with Windows. Progress
+automatically with whatever link you configured here (tunnel or your own
+address). Perfect for auto-starting with Windows. Progress
 goes to the log file in the data folder; board edits made in a normally
 started window are picked up live.</p>
 
@@ -1169,12 +1284,23 @@ class SettingsDialog(QDialog):
 
 
 class UpdateDialog(QDialog):
-    """Startup notification when a newer release is on GitHub."""
+    """Startup notification when a newer release is on GitHub.
+
+    Knows which release download fits this OS: the primary button fetches
+    exactly that file into the user's Downloads folder and reveals it, so
+    nobody has to pick the right asset off the releases page by hand.
+    """
+
+    _progress = Signal(int)   # download percent (-1 = size unknown)
+    _finished = Signal(str)   # saved file path
+    _failed = Signal(str)     # error text
 
     def __init__(self, main: "MainWindow", tag: str) -> None:
         super().__init__(main)
         self.main = main
         self.tag = tag
+        self.asset = pick_update_asset(main._latest_assets)
+        self._fallback = False  # after a failed download: button opens GitHub
         self.setWindowTitle("Update available")
         self.setMinimumWidth(420)
         lay = QVBoxLayout(self)
@@ -1190,26 +1316,83 @@ class UpdateDialog(QDialog):
         lay.addWidget(self.dont_remind)
 
         buttons = QDialogButtonBox()
-        self.update_btn = buttons.addButton("Take me to the update",
-                                            QDialogButtonBox.AcceptRole)
+        osname = "Windows" if sys.platform.startswith("win") else "Linux"
+        self.update_btn = buttons.addButton(
+            f"⬇ Download for {osname}" if self.asset else "Take me to the update",
+            QDialogButtonBox.AcceptRole)
         self.update_btn.setObjectName("Primary")
+        if self.asset:
+            self.update_btn.setToolTip(
+                f'Fetches {self.asset["name"]} straight into your Downloads folder')
         buttons.addButton("Remind me later", QDialogButtonBox.RejectRole)
         buttons.accepted.connect(self._go)
         buttons.rejected.connect(self._later)
         lay.addWidget(buttons)
 
+        self._progress.connect(self._on_progress)
+        self._finished.connect(self._on_finished)
+        self._failed.connect(self._on_failed)
+
     def _apply_skip(self) -> None:
         if self.dont_remind.isChecked():
             self.main.skip_update(self.tag)
 
-    def _go(self) -> None:
-        self._apply_skip()
-        self.main.open_releases()
-        self.accept()
-
     def _later(self) -> None:
         self._apply_skip()
         self.reject()
+
+    def _go(self) -> None:
+        self._apply_skip()
+        if not self.asset or self._fallback:
+            self.main.open_releases()
+            self.accept()
+            return
+        self.update_btn.setEnabled(False)
+        self.update_btn.setText("Downloading… 0%")
+        threading.Thread(target=self._download, name="update-download",
+                         daemon=True).start()
+
+    def _download(self) -> None:
+        dest = None
+        try:
+            dest = _unique_path(_download_dir(), self.asset["name"])
+            req = urllib.request.Request(
+                self.asset["url"], headers={"User-Agent": "VRCParameterRelay"})
+            with urllib.request.urlopen(req, timeout=30) as res, open(dest, "wb") as out:
+                total = int(res.headers.get("Content-Length") or 0)
+                done = 0
+                while True:
+                    chunk = res.read(65536)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    done += len(chunk)
+                    self._progress.emit(int(done * 100 / total) if total else -1)
+            if dest.suffix.lower() == ".appimage":  # AppImages must be executable
+                dest.chmod(dest.stat().st_mode | 0o755)
+        except Exception as exc:
+            if dest is not None:
+                try:
+                    dest.unlink(missing_ok=True)  # never leave half a download
+                except OSError:
+                    pass
+            self._failed.emit(str(exc))
+            return
+        self._finished.emit(str(dest))
+
+    def _on_progress(self, pct: int) -> None:
+        self.update_btn.setText("Downloading…" if pct < 0 else f"Downloading… {pct}%")
+
+    def _on_finished(self, path: str) -> None:
+        self.update_btn.setText("Downloaded ✓")
+        _reveal_file(Path(path))
+        self.accept()
+
+    def _on_failed(self, err: str) -> None:
+        self._fallback = True
+        self.update_btn.setEnabled(True)
+        self.update_btn.setText("Download failed — get it from GitHub")
+        self.update_btn.setToolTip(err)
 
 
 def _fmt(value: Any) -> str:

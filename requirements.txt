@@ -1,5 +1,12 @@
-PySide6>=6.7
-python-osc>=1.9
-zeroconf>=0.132
-aiohttp>=3.9
-openvr>=1.23
+# Ceilings stop a surprise major release from breaking a build.
+#
+# The aiohttp and zeroconf floors are *security* floors, not compatibility
+# ones: those two parse input that comes from off-process — guests over HTTP
+# and mDNS from the local network — so an existing checkout must not sit on an
+# old copy forever. start.bat re-checks these on every launch, and CI installs
+# fresh for every release. Raise them whenever upstream ships a security fix.
+PySide6>=6.7,<7
+python-osc>=1.9,<2
+zeroconf>=0.150,<1
+aiohttp>=3.14.3,<4
+openvr>=1.23,<3

@@ -12,7 +12,9 @@ from vrc_parameter_relay.core import AppCore
 from vrc_parameter_relay.store import Store
 from vrc_parameter_relay.tunnel import Tunnel
 from vrc_parameter_relay.webserver import GuestServer
-from vrc_parameter_relay.ui.main_window import MainWindow, _is_newer
+from vrc_parameter_relay.ui.main_window import (
+    MainWindow, UpdateDialog, _is_newer, _unique_path, pick_update_asset,
+)
 
 
 class StubLink:
@@ -35,12 +37,46 @@ check("older is not newer", not _is_newer("v1.0.0", "1.0.1"))
 check("double-digit compare", _is_newer("v1.10.0", "1.9.0"))
 check("junk tag is safe", not _is_newer("nightly", "1.0.1"))
 
+# the right download for each OS (real asset names from a release)
+ASSETS = [
+    {"name": "VRCParameterRelay-Linux", "url": "u1"},
+    {"name": "VRCParameterRelay-v1.4.0-x86_64.AppImage", "url": "u2"},
+    {"name": "VRCParameterRelay-v1.4.0-x86_64.AppImage.zsync", "url": "u3"},
+    {"name": "VRCParameterRelay-Windows.exe", "url": "u4"},
+]
+check("windows picks the exe",
+      pick_update_asset(ASSETS, "win32")["name"] == "VRCParameterRelay-Windows.exe")
+check("linux picks the AppImage, not its zsync sidecar",
+      pick_update_asset(ASSETS, "linux")["name"].endswith(".AppImage"))
+check("unknown platform falls back to the releases page",
+      pick_update_asset(ASSETS, "darwin") is None)
+check("no assets falls back too", pick_update_asset([], "win32") is None)
+
+# downloads never overwrite an earlier file
+import tempfile
+with tempfile.TemporaryDirectory() as td:
+    folder = Path(td)
+    check("fresh name kept", _unique_path(folder, "a.exe").name == "a.exe")
+    (folder / "a.exe").write_text("x")
+    check("existing name bumped", _unique_path(folder, "a.exe").name == "a (2).exe")
+
 app = QApplication([])
 store = Store()
 core = AppCore(store, StubLink())
 web = GuestServer(core, 0)
 tunnel = Tunnel(store)
 win = MainWindow(core, tunnel, web)
+
+# the dialog's primary button matches the platform's download
+win._latest_assets = ASSETS
+dlg = UpdateDialog(win, "v9.9.99")
+expect = "Windows" if sys.platform.startswith("win") else "Linux"
+check("dialog offers the platform download",
+      dlg.update_btn.text() == f"⬇ Download for {expect}")
+win._latest_assets = []
+dlg2 = UpdateDialog(win, "v9.9.99")
+check("no matching asset -> generic releases-page button",
+      dlg2.update_btn.text() == "Take me to the update")
 
 # skip_update stores the tag and hides the label (isHidden reflects the
 # explicit flag regardless of the offscreen window not being shown)

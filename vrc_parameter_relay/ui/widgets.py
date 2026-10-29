@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QWidget, QWidgetItem,
 )
 
+from ..core import int_switch_values
 from .theme import CATEGORY_COLOR_LABELS, CATEGORY_PALETTE
 
 SLIDER_STEPS = 1000
@@ -144,6 +145,29 @@ class FlowLayout(QLayout):
         return y + line_height + m.bottom() - rect.y()
 
 
+class _BoardSpinBox(QSpinBox):
+    """Stepper that ignores the mouse wheel: scrolling the board over a card
+    used to spin the value instead — and send every step to VRChat."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setFocusPolicy(Qt.StrongFocus)  # no focus grab by wheel either
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        event.ignore()  # falls through to the board's scroll area
+
+
+class _BoardSlider(QSlider):
+    """Slider that ignores the mouse wheel, for the same reason."""
+
+    def __init__(self) -> None:
+        super().__init__(Qt.Horizontal)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        event.ignore()
+
+
 class ControlCard(QFrame):
     """One control on the board. Draggable between categories."""
 
@@ -158,6 +182,10 @@ class ControlCard(QFrame):
         self.setFixedWidth(210)
         self._updating = False
         self._invert = bool(control.get("invert"))
+        # Int toggle / hold button: ON means "parameter == this value"
+        self._on_value: Optional[int] = None
+        if control.get("ptype") == "Int" and control["kind"] in ("toggle", "button"):
+            self._on_value = int_switch_values(control)[0]
         self._press_pos: QPoint | None = None
 
         root = QVBoxLayout(self)
@@ -178,6 +206,14 @@ class ControlCard(QFrame):
             inv_mark = QLabel("⇄", objectName="CardInv")
             inv_mark.setToolTip("Inverted — ON sends the parameter OFF")
             top.addWidget(inv_mark)
+        if self._on_value is not None:
+            on, off = int_switch_values(control)
+            val_mark = QLabel(f"={on}", objectName="CardValue")
+            val_mark.setToolTip(
+                f'{"ON" if control["kind"] == "toggle" else "Holding"} sets '
+                f'{control["param"]} to {on}, '
+                f'{"OFF" if control["kind"] == "toggle" else "letting go"} sets it to {off}')
+            top.addWidget(val_mark)
         menu_btn = QToolButton()
         menu_btn.setObjectName("CardMenu")
         menu_btn.setText("⋯")
@@ -228,7 +264,7 @@ class ControlCard(QFrame):
     def _build_slider(self, root: QVBoxLayout) -> None:
         self.vmin = float(self.control.get("min", 0))
         self.vmax = float(self.control.get("max", 1))
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = _BoardSlider()
         self.slider.setRange(0, SLIDER_STEPS)
         self.slider.setFixedHeight(CONTROL_H)
         self.value_label = QLabel("–")
@@ -260,7 +296,7 @@ class ControlCard(QFrame):
 
     def _build_int(self, root: QVBoxLayout) -> None:
         row = QHBoxLayout()
-        self.spin = QSpinBox()
+        self.spin = _BoardSpinBox()
         self.spin.setRange(int(self.control.get("min", 0)), int(self.control.get("max", 255)))
         self.spin.setButtonSymbols(QSpinBox.PlusMinus)
         self.spin.setFixedHeight(CONTROL_H)
@@ -282,14 +318,23 @@ class ControlCard(QFrame):
         try:
             kind = self.control["kind"]
             if kind == "toggle":
-                self.switch.setChecked(bool(value) != self._invert)  # shown = value XOR invert
+                if self._on_value is not None:
+                    self.switch.setChecked(value is not None and int(value) == self._on_value)
+                else:
+                    self.switch.setChecked(bool(value) != self._invert)  # value XOR invert
             elif kind == "slider":
                 if not self.slider.isSliderDown():
                     span = (self.vmax - self.vmin) or 1
                     self.slider.setValue(round((float(value) - self.vmin) / span * SLIDER_STEPS))
                     self.value_label.setText(f"{float(value):.2f}")
             elif kind == "int":
-                if not self.spin.hasFocus():
+                # Only hold off while the user's own change is still on its
+                # way out (or half-typed). Skipping on mere focus froze the
+                # stepper: a click gives it focus for good, so it stopped
+                # following VRChat and the next +/- counted from a stale value.
+                typing = (self.spin.hasFocus()
+                          and self.spin.text() != self.spin.textFromValue(self.spin.value()))
+                if not self._debounce.isActive() and not typing:
                     self.spin.setValue(int(value))
         except (TypeError, ValueError):
             pass

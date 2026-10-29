@@ -1,61 +1,26 @@
-"""Generates vrc_parameter_relay/assets/icon.ico (a toggle-switch glyph)."""
-from __future__ import annotations
-
-import os
+r"""Superseded 2026-09-28: the vrc-parameter-relay icon now comes from C:\DIY-Projects\_hub\design\icons518.py
+(the 518 green style). That script writes every file that carries this icon (its TARGETS table),
+so a changed drawing reaches all of them at once. This stub re-runs it for vrc-parameter-relay; the previous
+drawing is in version history and in C:\DIY-Projects\_icon-backup-2026-09-28.
+"""
+import subprocess
 import sys
 from pathlib import Path
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+GEN = Path(r"C:\DIY-Projects\_hub\design\icons518.py")
+NAME = "vrc-parameter-relay"
+FALLBACK_PY = r"C:\DIY-Projects\Deck518\tray\.venv\Scripts\python.exe"   # any 518 venv with PySide6
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QImage, QPainter, QPen
-from PySide6.QtWidgets import QApplication
-
-OUT = Path(__file__).parent.parent / "vrc_parameter_relay" / "assets" / "icon.ico"
-
-
-def draw(size: int) -> QImage:
-    """User's icon style: white disc, black circle ring, black glyph inside."""
-    img = QImage(size, size, QImage.Format_ARGB32)
-    img.fill(Qt.transparent)
-    p = QPainter(img)
-    p.setRenderHint(QPainter.Antialiasing)
-    s = size / 256.0
-    black = QColor("#0b0b0b")
-
-    # white disc with a thick black ring, close to the edge like the reference
-    p.setBrush(QColor("#ffffff"))
-    p.setPen(QPen(black, 15 * s))
-    p.drawEllipse(QRectF(12 * s, 12 * s, 232 * s, 232 * s))
-
-    # relay glyph inside: transmitting dot + two signal arcs, all black
-    p.setPen(Qt.NoPen)
-    p.setBrush(black)
-    dot_c = (100 * s, 156 * s)
-    p.drawEllipse(QRectF(dot_c[0] - 17 * s, dot_c[1] - 17 * s, 34 * s, 34 * s))
-
-    arc_pen = QPen(black, 14 * s, Qt.SolidLine, Qt.RoundCap)
-    p.setPen(arc_pen)
-    p.setBrush(Qt.NoBrush)
-    for radius in (48, 80):
-        r = radius * s
-        p.drawArc(QRectF(dot_c[0] - r, dot_c[1] - r, 2 * r, 2 * r), 12 * 16, 66 * 16)
-
-    p.end()
-    return img
-
-
-def main() -> None:
-    QApplication(sys.argv[:1])
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    img = draw(256)
-    if not img.save(str(OUT), "ICO"):
-        raise SystemExit("failed to write ico")
-    img.save(str(OUT.with_suffix(".png")), "PNG")
-    favicon = OUT.parent.parent / "web" / "favicon.png"
-    draw(64).save(str(favicon), "PNG")
-    print(f"wrote {OUT} + {favicon}")
-
-
-if __name__ == "__main__":
-    main()
+if not GEN.exists():
+    print(f"{GEN} not found - keeping the icon files as they are")
+    sys.exit(0)
+try:
+    import PySide6.QtSvg  # noqa: F401
+    py = sys.executable
+except ImportError:
+    py = FALLBACK_PY
+try:
+    sys.exit(subprocess.call([py, str(GEN), NAME]))
+except OSError as exc:
+    print(f"could not run {GEN} ({exc}) - keeping the icon files as they are")
+    sys.exit(0)

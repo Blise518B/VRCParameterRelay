@@ -43,6 +43,12 @@ async def first_msg(url: str) -> dict:
             return json.loads((await asyncio.wait_for(ws.receive(), 5)).data)
 
 
+async def first_msg_h(url: str, headers: dict) -> dict:
+    async with aiohttp.ClientSession() as s:
+        async with s.ws_connect(url, headers=headers) as ws:
+            return json.loads((await asyncio.wait_for(ws.receive(), 5)).data)
+
+
 class Admin:
     """One admin session: send an op, get the resulting snapshot."""
 
@@ -139,10 +145,31 @@ def main() -> None:
                   st["board"]["controls"][0]["id"] == ctrl["id"]
                   and st["board"]["controls"][0]["param"] == "Hoodie")
 
+            # set_value fires at slider-drag rate: on success it must answer
+            # with the cheap param delta ONLY, never a full snapshot
+            try:  # the edits above queued broadcasts for every panel — drain them
+                while True:
+                    await asyncio.wait_for(a.ws.receive(), 0.6)
+            except asyncio.TimeoutError:
+                pass
             link.sent.clear()
-            await a.op("set_value", id=ctrl["id"], value=True)
+            await a.ws.send_json({"op": "set_value", "id": ctrl["id"], "value": True})
+            msg = json.loads((await asyncio.wait_for(a.ws.receive(), 5)).data)
+            check("set_value streams the result back as a param batch",
+                  msg["t"] == "param_batch"
+                  and msg["params"].get("Hoodie", [None])[0] is False)
             check("set_value reaches OSC (inverted -> False)",
                   link.sent == [("Hoodie", "Bool", False)])
+            try:
+                extra = await asyncio.wait_for(a.ws.receive(), 0.5)
+                check(f"a successful set_value sends no snapshot (got {extra.data[:60]!r})",
+                      False)
+            except asyncio.TimeoutError:
+                check("a successful set_value sends no snapshot", True)
+
+            await a.op("set_value", id="no-such-control", value=True)
+            check("a failed set_value reports an error and a corrective snapshot",
+                  a.last_error is not None)
 
             st = await a.op("add_category", name="Extras")
             check("add_category works", len(st["board"]["categories"]) == 5)
@@ -218,6 +245,44 @@ def main() -> None:
     check("…and /admin stops serving",
           loop.run_until_complete(page(f"{base}/admin?k={admin_token}")) == 403)
     store.set("admin_enabled", True)
+
+    # -- LAN-only admin: a proxied (public) request cannot reach admin ------
+    # Caddy/cloudflared add X-Forwarded-For; the loopback test client does not,
+    # so a forwarding header is what marks a request as "came from the internet".
+    async def get_with(url: str, headers: dict) -> int:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, headers=headers) as r:
+                return r.status
+
+    async def ws_denied_with(url: str, headers: dict) -> bool:
+        async with aiohttp.ClientSession() as s:
+            async with s.ws_connect(url, headers=headers) as ws:
+                msg = json.loads((await asyncio.wait_for(ws.receive(), 5)).data)
+                return msg.get("t") == "denied"
+
+    fwd = {"X-Forwarded-For": "203.0.113.7"}  # a request relayed in from the internet
+    check("default: a direct local request still opens /admin",
+          loop.run_until_complete(page(f"{base}/admin?k={admin_token}")) == 200)
+    check("default: a PROXIED request is refused /admin (403)",
+          loop.run_until_complete(get_with(f"{base}/admin?k={admin_token}", fwd)) == 403)
+    check("default: a PROXIED admin socket is denied even with the right token",
+          loop.run_until_complete(
+              ws_denied_with(f"{base}/ws?admin=1&k={admin_token}", fwd)))
+
+    store.set("admin_public", True)
+    check("admin_public=True: a proxied request reaches /admin again",
+          loop.run_until_complete(get_with(f"{base}/admin?k={admin_token}", fwd)) == 200)
+    check("admin_public=True: a proxied admin socket connects",
+          not loop.run_until_complete(
+              ws_denied_with(f"{base}/ws?admin=1&k={admin_token}", fwd)))
+    store.set("admin_public", False)
+
+    # the guest board must stay public regardless — only admin is gated.
+    # (the guest token was rotated by reset_guest_link earlier, so read it now)
+    hello = loop.run_until_complete(
+        first_msg_h(f"{base}/ws?k={core.guest_token()}", fwd))
+    check("the guest board is still reachable through the proxy",
+          hello.get("t") == "hello")
 
     print("ALL ADMIN PANEL TESTS PASSED")
 

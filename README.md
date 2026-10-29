@@ -22,11 +22,15 @@ forwarding, no accounts, no setup.
   into categories, saved per avatar, switches automatically with your avatar
 - Lock a category so guests can look but not touch
 - Invert a toggle (⇄) when a parameter's logic is backwards
+- Number (Int) parameters work as toggles and hold buttons too — each one
+  sets its own value (Outfit = 1, 2, 3 …) and they switch each other off,
+  just like VRChat's own menu
 - **Share**: one click gives you a link; anyone with it can use your board
   from any browser. Pause kicks guests but keeps the same link; Reset link
   kills all old links
-- Want a link that never changes? Put a free ngrok authtoken + static domain
-  into *Link settings*
+- Want a link that never changes? Type your own domain into *Share → Your own
+  address* (setup guide: [docs/REMOTE-ACCESS.md](docs/REMOTE-ACCESS.md)), or
+  put a free ngrok authtoken + static domain into *Link settings*
 - **⚡ YOLO mode**: guests get all parameters, not just your board
 
 ## Quick start
@@ -45,8 +49,8 @@ unsigned exe — *More info → Run anyway*.
 
 - Settings and boards live in `%APPDATA%\VRCParameterRelay`
 - The app has to run on the same PC as VRChat
-- Quick-tunnel links change when you restart the app — use the ngrok option
-  for a permanent one
+- Quick-tunnel links change when you restart the app — use your own address
+  or the ngrok option for a permanent one
 - On Linux, use the AppImage from Releases
 
 ## From source

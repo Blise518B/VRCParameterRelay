@@ -24,14 +24,30 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # separate secret for the admin panel — a guest link must NEVER grant it
     "admin_token": None,             # generated on first run
     "admin_enabled": True,           # serve /admin at all
+    # admin panel is LAN/loopback-only by default: a request that arrived
+    # through the reverse proxy or tunnel (i.e. from the internet) is refused.
+    # Turn on only for deliberate remote administration of a headless relay.
+    "admin_public": False,
+    # Sharing on your own address (docs/REMOTE-ACCESS.md): the bare address
+    # carries NO secret. Guests type this spoken password once and their
+    # browser keeps a cookie; the long token stays for one-click links.
+    # Generated on first run.
+    "share_password": "",
+    # Your own address, e.g. "https://relay.example.com" — set in the Share
+    # window. Empty = share through a tunnel. Set = no tunnel: the link is
+    # this address, and the listener opens to the LAN so whatever routes the
+    # address here (port forward, reverse proxy, Cloudflare Tunnel) reaches it.
+    "public_url": "",
+    # Extra proxy address(es), comma-separated, whose X-Forwarded-For is
+    # believed. Connections from this machine and the LAN already are; this
+    # is only for a proxy outside both. A peer listed here is also treated
+    # as the public path, so it never reaches the admin panel.
+    "trusted_proxy": "",
     "last_avatar_id": None,
-    "tunnel_provider": "cloudflare",  # "ngrok" (static domain) or "selfhost"
+    "tunnel_provider": "cloudflare",  # or "ngrok" (static domain)
     "ngrok_authtoken": "",
     "ngrok_domain": "",
-    "advanced_link": False,     # unlocks ngrok + self-hosting in Link settings
-    "selfhost_host": "",        # public hostname/domain (e.g. a DDNS name)
-    "selfhost_port": None,      # public port (router side); defaults to web_port
-    "selfhost_upnp": False,     # ask the router to open the port automatically
+    "advanced_link": False,     # unlocks the ngrok option in Link settings
     "share_autostart": False,
     "yolo_enabled": False,
     "require_guest_names": False,  # guests must introduce themselves first
@@ -79,6 +95,8 @@ class Store:
             settings["guest_token"] = new_token()
         if not settings.get("admin_token"):
             settings["admin_token"] = new_token()  # always distinct from the guest one
+        if not settings.get("share_password"):
+            settings["share_password"] = new_share_password()
         self._write_json(path, settings)
         return settings
 
@@ -100,6 +118,11 @@ class Store:
         token = new_token()
         self.set("admin_token", token)
         return token
+
+    def regenerate_share_password(self) -> str:
+        password = new_share_password()
+        self.set("share_password", password)
+        return password
 
     # -- avatar profiles ---------------------------------------------------
 
@@ -225,6 +248,51 @@ def normalize_profile(data: dict[str, Any], avatar_id: str) -> dict[str, Any]:
     if data.get("active_preset") not in preset_ids:
         data["active_preset"] = data["presets"][0]["id"]
     return data
+
+
+#: Vocabulary for the spoken share password — the avatar, the board, the
+#: room. Every word is short, common and unmistakable read out over a voice
+#: call; nothing that could be misheard for another word on the list.
+SHARE_WORDS = (
+    # the avatar
+    "avatar", "toggle", "gesture", "emote", "outfit", "hoodie", "visor",
+    "wings", "tail", "ears", "glow", "shader", "mirror", "portal", "spawn",
+    "puppet", "clone", "beacon", "tracker", "friend",
+    # the board
+    "slider", "button", "switch", "preset", "relay", "remote", "signal",
+    "pulse", "orbit", "vertex", "pixel", "prism", "glitch", "drift",
+    "static", "render", "instance", "lobby", "world", "desktop",
+    # colour + light
+    "neon", "chrome", "cobalt", "ember", "velvet", "amber", "violet",
+    "crimson", "indigo", "silver", "golden", "aurora", "nebula", "comet",
+    "lantern", "flicker", "shimmer", "starlight", "moonlit", "twilight",
+    # the room
+    "disco", "strobe", "laser", "tempo", "groove", "echo", "synth",
+    "chorus", "anthem", "encore", "remix", "vinyl", "dancer", "confetti",
+    "stage", "crowd", "spotlight", "skyline", "horizon", "sunrise",
+    # the stream
+    "stream", "capture", "preview", "overlay", "frame", "focus", "zoom",
+    "lens", "filter", "gradient", "spectrum", "cascade", "polygon",
+    "keyframe", "playback", "footage", "closeup", "highlight", "contrast",
+    "luminous",
+    # nature
+    "river", "meadow", "forest", "summit", "canyon", "harbor", "island",
+    "glacier", "thunder", "breeze", "blossom", "pebble", "willow", "maple",
+    "cedar", "falcon", "otter", "fox", "raven", "tiger",
+)
+
+
+def new_share_password() -> str:
+    """Three words and a number: strong enough to sit on a public address,
+    short enough to say out loud without spelling anything.
+
+    120 words cubed x 90 is about 155 million combinations, and the guest
+    server blocks an address for 15 minutes after 8 wrong tries, so guessing
+    is not a practical attack even though the hostname is public (every
+    certificate is published to transparency logs).
+    """
+    picks = secrets.SystemRandom().sample(SHARE_WORDS, 3)
+    return "-".join(picks) + f"-{secrets.randbelow(90) + 10}"
 
 
 def new_token() -> str:

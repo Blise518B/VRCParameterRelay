@@ -20,7 +20,25 @@ const COLORS = { green: "#4af58c", blue: "#7aa7ff", cyan: "#56d9f2",
                  yellow: "#ffb454", red: "#ff5561", purple: "#d78cff" };
 const KINDS = { toggle: "Toggle switch", button: "Hold button",
                 slider: "Slider", int: "Number stepper" };
-const KIND_FOR = { Bool: ["toggle", "button"], Int: ["int", "slider"], Float: ["slider"] };
+const KIND_FOR = { Bool: ["toggle", "button"], Int: ["int", "slider", "toggle", "button"],
+                   Float: ["slider"] };
+// Int toggles/buttons send a value; the labels say which moment it belongs to
+const SWITCH_LABELS = { toggle: ["Value when ON", "Value when OFF"],
+                        button: ["Value while held", "Value on release"] };
+const isIntSwitch = (c) => c.ptype === "Int" && (c.kind === "toggle" || c.kind === "button");
+// shown state: Bool = value XOR invert; Int = parameter equals the ON value
+function switchOn(c, v) {
+  if (c.ptype === "Int") return v != null && Number(v) === Number(c.on ?? 1);
+  return c.invert ? !v : !!v;
+}
+// lowest ON value no other toggle/button on this Int uses (Outfit = 1, 2, 3 …)
+function nextOnValue(c) {
+  const used = new Set(((S && S.board.controls) || [])
+    .filter((x) => x.id !== c.id && x.param === c.param && isIntSwitch(x))
+    .map((x) => Number(x.on ?? 1)));
+  for (let v = 1; v <= 255; v++) if (!used.has(v)) return v;
+  return 1;
+}
 
 const esc = (s) => String(s == null ? "" : s)
   .replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -66,8 +84,12 @@ function connect() {
       // snapshots are built when sent and every change produces one, so the
       // newest simply wins — never gate this, a lost reply would freeze us
       S = msg; applyStyle(msg.style); render();
+    } else if (msg.t === "param_batch") {  // 50ms server-side batches
+      Object.entries(msg.params).forEach(([name, [value]]) => {
+        values[name] = value; queuePaint(name);
+      });
     } else if (msg.t === "param") {
-      values[msg.name] = msg.value; paintValues();
+      values[msg.name] = msg.value; queuePaint(msg.name);
     } else if (msg.t === "error") {
       toast(msg.msg);
     } else if (msg.t === "denied") {
@@ -82,8 +104,12 @@ function connect() {
     setTimeout(connect, retryMs); retryMs = Math.min(retryMs * 1.6, 15000);
   };
 }
+let appliedStyle = "";
 function applyStyle(style) {
   if (!style) return;
+  const key = (style.theme || "neon") + "|" + (style.font || "");
+  if (key === appliedStyle) return;  // snapshots repeat it; only real changes may recalc styles
+  appliedStyle = key;
   document.body.dataset.theme = style.theme || "neon";
   if (style.font) document.documentElement.style.setProperty("--ui-font", '"' + style.font + '"');
 }
@@ -118,10 +144,18 @@ function renderHead() {
 // -- board ----------------------------------------------------------------
 function render() {
   if (!S) return;
-  values = { ...S.values, ...values };
+  // Snapshot values are authoritative: they are built server-side at send
+  // time, so they can never be older than a delta we already received.
+  // (Letting the local copy win here made every toggle click render its OLD
+  // value for a beat — the button visibly flipped back and forth.) The
+  // params snapshot seeds values the board doesn't carry, for the dock list.
+  const seed = {};
+  Object.entries(S.params || {}).forEach(([n, p]) => { seed[n] = p.value; });
+  values = { ...seed, ...values, ...S.values };
   renderHead();
   renderBoard();
   renderParams();
+  indexValues();
 }
 
 function renderBoard() {
@@ -162,6 +196,7 @@ function cardEl(c) {
       <span class="card-grip" draggable="true" title="Drag to move this control">⠿</span>
       <span class="label" title="${esc(c.param)}">${esc(c.label || c.param)}</span>
       ${c.invert ? '<span class="card-inv" title="Inverted">⇄</span>' : ""}
+      ${isIntSwitch(c) ? `<span class="card-val" title="Sets ${esc(c.param)} to ${esc(c.on ?? 1)}, back to ${esc(c.off ?? 0)}">=${esc(c.on ?? 1)}</span>` : ""}
       <button class="card-menu" title="Edit or remove">⋯</button>
     </div>`;
   el.appendChild(widget(c));
@@ -172,9 +207,8 @@ function cardEl(c) {
 function widget(c) {
   const val = values[c.param];
   if (c.kind === "toggle") {
-    const inv = !!c.invert, on = inv ? !val : !!val;
     const b = document.createElement("button");
-    b.className = "switch" + (on ? " on" : "");
+    b.className = "switch" + (switchOn(c, val) ? " on" : "");
     b.dataset.set = c.id;
     b.dataset.param = c.param;
     return b;
@@ -216,22 +250,55 @@ function renderParams() {
       </div>`).join("");
 }
 
-function paintValues() {
-  document.querySelectorAll("[data-param]").forEach((el) => {
-    const v = values[el.dataset.param];
-    if (el.classList.contains("pval") || el.classList.contains("value")
-        || el.classList.contains("num")) el.textContent = fmt(v);
-    if (el.classList.contains("switch")) {
-      const c = ((S.board && S.board.controls) || []).find((x) => x.id === el.dataset.set);
-      if (c) el.classList.toggle("on", c.invert ? !v : !!v);
-    }
+// VRChat streams tracking parameters many times a second; scanning the whole
+// document per delta pinned a CPU core. Instead the DOM is indexed once per
+// render and deltas repaint only their own nodes, coalesced to one frame.
+let valueIndex = new Map();  // param name -> [{kind, el, c}]
+function indexValues() {
+  valueIndex = new Map();
+  const add = (p, entry) => {
+    let list = valueIndex.get(p);
+    if (!list) valueIndex.set(p, list = []);
+    list.push(entry);
+  };
+  const ctrls = (S && S.board.controls) || [];
+  const byId = new Map(ctrls.map((c) => [c.id, c]));
+  document.querySelectorAll(".pval, .value, .num").forEach((el) => {
+    if (el.dataset.param) add(el.dataset.param, { kind: "text", el });
+  });
+  document.querySelectorAll(".switch[data-set]").forEach((el) => {
+    const c = byId.get(el.dataset.set);
+    if (c) add(c.param, { kind: "switch", el, c });
   });
   document.querySelectorAll("input[data-slide]").forEach((el) => {
-    if (document.activeElement === el) return;
-    const c = ((S.board && S.board.controls) || []).find((x) => x.id === el.dataset.slide);
-    if (!c) return;
-    const min = num(el.dataset.min), max = num(el.dataset.max);
-    el.value = max === min ? 0 : Math.round(((num(values[c.param]) - min) / (max - min)) * 1000);
+    const c = byId.get(el.dataset.slide);
+    if (c) add(c.param, { kind: "slide", el });
+  });
+}
+
+const dirtyParams = new Set();
+let paintPending = false;
+function queuePaint(name) {
+  dirtyParams.add(name);
+  if (paintPending) return;
+  paintPending = true;
+  requestAnimationFrame(() => {
+    paintPending = false;
+    const names = [...dirtyParams];
+    dirtyParams.clear();
+    names.forEach(paintParam);
+  });
+}
+
+function paintParam(name) {
+  const v = values[name];
+  (valueIndex.get(name) || []).forEach(({ kind, el, c }) => {
+    if (kind === "text") el.textContent = fmt(v);
+    else if (kind === "switch") el.classList.toggle("on", switchOn(c, v));
+    else if (kind === "slide" && document.activeElement !== el) {
+      const min = num(el.dataset.min), max = num(el.dataset.max);
+      el.value = max === min ? 0 : Math.round(((num(v) - min) / (max - min)) * 1000);
+    }
   });
 }
 
@@ -377,16 +444,30 @@ function editControl(c) {
     <div class="modal-row"><label>Min</label>
       <input type="number" id="mMin" step="any" value="${c.min == null ? 0 : c.min}"></div>
     <div class="modal-row"><label>Max</label>
-      <input type="number" id="mMax" step="any" value="${c.max == null ? (ptype === "Float" ? 1 : 255) : c.max}"></div>`;
+      <input type="number" id="mMax" step="any" value="${c.max == null ? (ptype === "Float" ? 1 : 255) : c.max}"></div>
+    <div class="modal-row" id="mOnRow"><label id="mOnLabel"></label>
+      <input type="number" id="mOn" min="0" max="255" step="1"
+        value="${c.on == null ? nextOnValue(c) : c.on}"
+        title="What ${esc(c.param)} is set to. Several toggles on one number work like VRChat's menu: Outfit = 1, Outfit = 2, …"></div>
+    <div class="modal-row" id="mOffRow"><label id="mOffLabel"></label>
+      <input type="number" id="mOff" min="0" max="255" step="1" value="${c.off == null ? 0 : c.off}"
+        title="What ${esc(c.param)} goes back to (usually 0)."></div>`;
   const modal = $("modal");
   modal.classList.remove("hidden");
   const ranged = () => ["slider", "int"].includes($("mKind").value);
-  const sync = () => { $("mMin").disabled = !ranged(); $("mMax").disabled = !ranged(); };
+  const intSwitch = () => ptype === "Int" && ["toggle", "button"].includes($("mKind").value);
+  const sync = () => {
+    $("mMin").disabled = !ranged(); $("mMax").disabled = !ranged();
+    const sw = intSwitch();
+    $("mOnRow").style.display = $("mOffRow").style.display = sw ? "" : "none";
+    if (sw) [$("mOnLabel").textContent, $("mOffLabel").textContent] = SWITCH_LABELS[$("mKind").value];
+  };
   $("mKind").onchange = sync; sync();
   $("modalOk").onclick = () => {
     const changes = { label: $("mLabel").value, kind: $("mKind").value };
     if (ranged()) { changes.min = Number($("mMin").value); changes.max = Number($("mMax").value); }
     if ($("mInv")) changes.invert = $("mInv").checked;
+    if (intSwitch()) { changes.on = Number($("mOn").value); changes.off = Number($("mOff").value); }
     send("update_control", { id: c.id, changes });
     modal.classList.add("hidden");
   };
@@ -448,6 +529,10 @@ document.addEventListener("click", (e) => {
   } else if (t.dataset && t.dataset.set) {
     const on = !t.classList.contains("on");
     t.classList.toggle("on", on);
+    const c = ((S && S.board.controls) || []).find((x) => x.id === t.dataset.set);
+    // raw value — a snapshot landing mid-flight must agree
+    if (c) values[c.param] = isIntSwitch(c) ? Number(on ? (c.on ?? 1) : (c.off ?? 0))
+                                            : (c.invert ? !on : on);
     send("set_value", { id: t.dataset.set, value: on });
   } else if (t.dataset && t.dataset.step) {
     const numEl = t.parentNode.querySelector(".num");
@@ -455,6 +540,7 @@ document.addEventListener("click", (e) => {
     let v = num(numEl.textContent) + Number(t.dataset.step);
     v = Math.max(min, Math.min(max, v));
     numEl.textContent = v;
+    if (numEl.dataset.param) values[numEl.dataset.param] = v;
     send("set_value", { id: t.dataset.id, value: v });
   } else if (t.id === "addCategory") {
     send("add_category", {});
@@ -524,7 +610,10 @@ document.addEventListener("input", (e) => {
     const min = num(el.dataset.min), max = num(el.dataset.max);
     const v = min + (num(el.value) / 1000) * (max - min);
     const out = el.parentNode.querySelector(".value");
-    if (out) out.textContent = fmt(v);
+    if (out) {
+      out.textContent = fmt(v);
+      if (out.dataset.param) values[out.dataset.param] = v;
+    }
     if (!slideT) slideT = setTimeout(() => {
       slideT = null; send("set_value", { id: el.dataset.slide, value: v });
     }, 60);
@@ -559,12 +648,19 @@ document.addEventListener("focusin", (e) => {
   if (e.target.id === "avatarName") typing = "avatarName";
   if (e.target.classList.contains("cat-name")) typing = "cat";
 });
+// Only a real edit is sent: every op answers with a full snapshot, and a
+// re-render landing between mousedown and mouseup swallowed the click that
+// moved focus out of the field.
 document.addEventListener("focusout", (e) => {
   const t = e.target;
-  if (t.id === "avatarName") { typing = null; send("rename_avatar", { name: t.value }); }
-  else if (t.classList.contains("cat-name")) {
+  if (t.id === "avatarName") {
     typing = null;
-    send("rename_category", { cat: t.closest(".category").dataset.cat, name: t.value });
+    if (S && t.value !== (S.avatar_name || "")) send("rename_avatar", { name: t.value });
+  } else if (t.classList.contains("cat-name")) {
+    typing = null;
+    const catId = t.closest(".category").dataset.cat;
+    const cat = cats().find((c) => c.id === catId);
+    if (!cat || t.value !== (cat.name || "")) send("rename_category", { cat: catId, name: t.value });
   }
 });
 document.addEventListener("keydown", (e) => {

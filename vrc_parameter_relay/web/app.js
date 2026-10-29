@@ -38,10 +38,21 @@ function rememberName() {
 }
 if (guestName) rememberName();
 
+function bouncedOnce() {
+  try {
+    if (sessionStorage.getItem("vrcpr_bounced")) return true;
+    sessionStorage.setItem("vrcpr_bounced", "1");
+    return false;
+  } catch (e) { return true; }
+}
+
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws?k=${encodeURIComponent(token)}`
-    + `&n=${encodeURIComponent(guestName)}`);
+  // The token rides in the URL only on a one-click link (the server plants
+  // a cookie and bounces the browser to the bare address on arrival). A
+  // signed-in browser sends its cookie by itself, so nothing is appended.
+  ws = new WebSocket(`${proto}://${location.host}/ws?n=${encodeURIComponent(guestName)}`
+    + (token ? `&k=${encodeURIComponent(token)}` : ""));
 
   ws.onopen = () => { retryMs = 1000; setStatus(true, "connected"); };
 
@@ -61,6 +72,7 @@ function connect() {
         if (msg.t === "hello" || msg.t === "resumed") {
           yoloOn = !!msg.yolo;
           setPaused(!!msg.paused);
+          try { sessionStorage.removeItem("vrcpr_bounced"); } catch (e) {}
         }
         if (msg.t === "resumed") setPaused(false);
         if (msg.need_name) showNameGate();
@@ -81,24 +93,26 @@ function connect() {
         render();
         break;
       case "param":
-        values[msg.name] = msg.value;
-        for (const c of board.controls) {
-          if (c.param === msg.name && cards.has(c.id)) cards.get(c.id)(msg.value);
+        applyParam(msg.name, msg.value, msg.ptype);
+        break;
+      case "param_batch":  // 50ms server-side batches
+        for (const [name, [value, ptype]] of Object.entries(msg.params)) {
+          applyParam(name, value, ptype);
         }
-        if (allParams[msg.name]) {
-          allParams[msg.name].value = msg.value;
-        } else if (yoloOn && msg.ptype) {
-          allParams[msg.name] = { ptype: msg.ptype, value: msg.value };
-        }
-        if (paramRows.has(msg.name)) paramRows.get(msg.name)(msg.value);
         break;
       case "paused":
         setPaused(true);
         break;
       case "denied":
-        showOverlay("This remote link is invalid or has been revoked by the host.");
         ws.onclose = null;
         ws.close();
+        // A stale cookie (the host rotated the token) or a dead one-click
+        // link: send the browser to the bare address, where the password
+        // door lives. Once only — a full board also refuses, and that must
+        // not bounce forever.
+        if (!bouncedOnce()) { location.replace("/"); return; }
+        showOverlay("This remote link is invalid or has been revoked by the host — "
+          + "or the board is full. Ask the host for the current password.");
         return;
     }
   };
@@ -108,6 +122,19 @@ function connect() {
     setTimeout(connect, retryMs);
     retryMs = Math.min(retryMs * 1.6, 15000);
   };
+}
+
+function applyParam(name, value, ptype) {
+  values[name] = value;
+  for (const c of board.controls) {
+    if (c.param === name && cards.has(c.id)) cards.get(c.id)(value);
+  }
+  if (allParams[name]) {
+    allParams[name].value = value;
+  } else if (yoloOn && ptype) {
+    allParams[name] = { ptype: ptype, value: value };
+  }
+  if (paramRows.has(name)) paramRows.get(name)(value);
 }
 
 // mirror the host's theme + font (CSS handles the rest via variables)
@@ -348,17 +375,16 @@ function buildCard(c, locked) {
   const val = values[c.param];
 
   if (c.kind === "toggle") {
-    const inv = !!c.invert; // shown state = parameter value XOR invert
     const btn = document.createElement("button");
-    btn.className = "switch" + ((inv ? !val : !!val) ? " on" : "");
+    btn.className = "switch" + (switchOn(c, val) ? " on" : "");
     btn.setAttribute("aria-label", c.label);
     btn.onclick = () => {
       const on = !btn.classList.contains("on");
       btn.classList.toggle("on", on);
-      send(c.id, on); // server flips it for inverted controls
+      send(c.id, on); // server maps it (inverted Bool, Int ON/OFF value)
     };
     card.appendChild(btn);
-    cards.set(c.id, (v) => btn.classList.toggle("on", inv ? !v : !!v));
+    cards.set(c.id, (v) => btn.classList.toggle("on", switchOn(c, v)));
 
   } else if (c.kind === "button") {
     const btn = document.createElement("button");
@@ -437,6 +463,14 @@ function buildCard(c, locked) {
   return card;
 }
 
+// Is a toggle shown ON? Bool: value XOR invert. Int (VRChat-menu style):
+// ON while the parameter equals the toggle's value, so several toggles on
+// one Int (Outfit = 1, 2, 3) light up one at a time.
+function switchOn(c, v) {
+  if (c.ptype === "Int") return v != null && Number(v) === Number(c.on ?? 1);
+  return c.invert ? !v : !!v;
+}
+
 function valToStep(v, min, max) {
   const x = Number(v);
   if (!Number.isFinite(x) || max === min) return 0;
@@ -493,8 +527,7 @@ function askName() {
 document.getElementById("nameBtn").onclick = askName;
 document.getElementById("nameBtn").textContent = guestName ? `✎ ${guestName}` : "✎ set name";
 
-if (!token) {
-  showOverlay("Missing access token — ask the host for a fresh link.");
-} else {
-  connect();
-}
+// No token in the address is the NORMAL case now: the server already let
+// this page through (password door -> cookie), and the cookie rides the
+// websocket by itself.
+connect();

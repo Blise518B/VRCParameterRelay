@@ -112,13 +112,7 @@ def main() -> int:
                 time.sleep(0.1)
             if web.port:
                 core.set_sharing(True)
-                settings = store.settings
-                if (settings.get("advanced_link")
-                        and settings.get("tunnel_provider") == "selfhost"):
-                    if settings.get("selfhost_upnp"):
-                        from .upnp import map_async
-                        map_async(settings, web.port, core.emit)
-                else:
+                if not store.settings.get("public_url"):  # own address: no tunnel
                     tunnel.start(web.port)
 
         threading.Thread(target=autostart, daemon=True).start()
@@ -126,8 +120,6 @@ def main() -> int:
     def shutdown() -> None:
         tunnel.stop()
         link.stop()
-        from .upnp import cleanup_mappings
-        cleanup_mappings()  # close any router port we opened
         guard.release()
 
     app.aboutToQuit.connect(shutdown)

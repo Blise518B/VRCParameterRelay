@@ -141,6 +141,54 @@ def main() -> None:
         win.close()
         check("close works normally without a tray", win.isHidden())
 
+    # -- sharing gate: the board STOP/RESUME button must always work ----------
+    # A tray-copied link used to land guests on a paused board while this
+    # button sat disabled in a third "off" state with no way to resume.
+    class StubTunnel:
+        state = "off"
+        url = None
+
+        def __init__(self):
+            self.started = []
+            self.on_change = lambda st: None
+
+        def provider(self):
+            return "cloudflare"
+
+        def start(self, port):
+            self.started.append(port)
+            self.state = "starting"
+
+        def stop(self):
+            self.state = "off"
+
+        def restart(self, port):
+            self.start(port)
+
+    core2 = AppCore(Store(), StubLink())
+    web2 = type("Web", (), {"port": 3081, "requested_port": 3081})()
+    tun = StubTunnel()
+    win2 = MainWindow(core2, tun, web2)
+    check("fresh start shows the paused state (START), not a dead button",
+          win2.pause_btn.isEnabled() and win2.pause_btn.text() == "▶ START"
+          and win2.pause_btn.property("state") == "paused")
+    win2._toggle_pause()
+    check("board button starts sharing for real (tunnel included)",
+          core2.sharing_enabled and tun.started == [3081])
+    check("…and flips to the emergency stop", win2.pause_btn.text() == "■ STOP")
+    win2._toggle_pause()
+    check("board button pauses again and cancels the young tunnel",
+          not core2.sharing_enabled and tun.state == "off")
+    tun.state = "online"
+    win2._refresh_pause_btn()
+    check("paused with a live link reads RESUME",
+          win2.pause_btn.text() == "▶ RESUME" and win2.pause_btn.isEnabled())
+    win2.share_dialog._toggle()
+    check("Share dialog start goes through the same path",
+          core2.sharing_enabled and win2.pause_btn.text() == "■ STOP")
+    win2._quitting = True
+    win2.close()
+
     print("ALL TRAY/AUTOSTART TESTS PASSED")
 
 

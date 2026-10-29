@@ -132,6 +132,7 @@ body[data-theme="broker"] .cat-grip { color: var(--cat-title, var(--accent)); }
 .card-top { display: flex; align-items: center; gap: 4px; }
 .card-top .label { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; }
 .card-inv { color: #f0a35e; font-size: 13px; font-weight: 700; }
+.card-val { color: var(--muted); font-size: 11.5px; font-weight: 650; }  /* Int toggle value */
 .cat-hint {
   color: #5d7a63; font-size: 12px; padding: 16px; text-align: center;
   border: 1px dashed var(--card-edge); border-radius: 9px;

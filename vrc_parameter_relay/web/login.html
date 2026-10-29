@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VRC Parameter Relay — remote</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center;
+    justify-content: center; background: #0a0c0a; color: #c9d4cc;
+    font-family: "Segoe UI", system-ui, sans-serif; padding: 20px;
+  }
+  .box {
+    width: 100%; max-width: 380px; border: 1px solid #1e2a24;
+    border-radius: 14px; padding: 26px 24px; background: #0e120f;
+  }
+  h1 { margin: 0 0 4px; font-size: 19px; color: #4af58c; letter-spacing: .3px; }
+  p.sub { margin: 0 0 20px; font-size: 13px; color: #7c8a84; line-height: 1.45; }
+  label { display: block; font-size: 12px; color: #7c8a84; margin-bottom: 6px; }
+  input {
+    width: 100%; box-sizing: border-box; padding: 11px 12px; font-size: 16px;
+    border-radius: 9px; border: 1px solid #24322b; background: #070908;
+    color: #e6efe9; font-family: inherit; letter-spacing: .4px;
+  }
+  input:focus { outline: none; border-color: #4af58c; }
+  button {
+    width: 100%; margin-top: 12px; padding: 11px; font-size: 15px;
+    font-weight: 600; border: none; border-radius: 9px; background: #4af58c;
+    color: #04120a; cursor: pointer; font-family: inherit;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  #msg { margin-top: 14px; font-size: 13px; min-height: 18px; line-height: 1.4; }
+  #msg.bad { color: #ff5561; }
+  #msg.wait { color: #ffb454; }
+  .hint { margin-top: 18px; font-size: 11px; color: #56655e; line-height: 1.5; }
+</style>
+</head>
+<body>
+<form class="box" id="form" autocomplete="off">
+  <h1>VRC Parameter Relay</h1>
+  <p class="sub">Remote control for this avatar. Enter the password the host
+    gave you — this browser stays signed in afterwards.</p>
+  <label for="pw">Password</label>
+  <input id="pw" name="pw" type="password" autocomplete="current-password"
+         autocapitalize="none" autocorrect="off" spellcheck="false"
+         placeholder="three words and a number" required>
+  <button id="go" type="submit">Enter</button>
+  <div id="msg"></div>
+  <div class="hint">Cookies must be enabled — that is what keeps you signed
+    in. The password is never put in the address bar.</div>
+</form>
+<script>
+"use strict";
+const form = document.getElementById("form");
+const pw = document.getElementById("pw");
+const go = document.getElementById("go");
+const msg = document.getElementById("msg");
+
+function say(text, kind) {
+  msg.textContent = text;
+  msg.className = kind || "";
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const value = pw.value.trim();
+  if (!value) return;
+  go.disabled = true;
+  say("Checking…", "wait");
+  try {
+    /* the password rides in a HEADER, never the URL: nothing to leak into
+       the proxy's access log, this browser's history, or a screenshare */
+    const reply = await fetch("/", {
+      headers: { "X-Share-Password": value },
+      cache: "no-store",
+    });
+    if (reply.status === 204) {
+      say("Welcome — loading the board…");
+      location.replace("/");
+      return;
+    }
+    if (reply.status === 429) {
+      /* "busy" = too many wrong passwords from everyone at once (someone is
+         guessing); otherwise it's this connection that is blocked */
+      const why = await reply.text();
+      say(why === "busy"
+            ? "Too many sign-in attempts right now. Try again in a minute."
+            : "Too many tries from your connection. Wait a few minutes.", "bad");
+    } else {
+      say("That password isn't right.", "bad");
+      pw.select();
+    }
+  } catch (err) {
+    say("Could not reach the app. Is it running?", "bad");
+  }
+  go.disabled = false;
+});
+
+pw.focus();
+</script>
+</body>
+</html>

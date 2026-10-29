@@ -79,13 +79,14 @@ async def scenario(url: str, core: AppCore, link: StubLink) -> None:
             check("unknown param rejected",
                   not any(n == "DoesNotExist" for n, _, _ in link.sent))
 
-            # param stream now includes non-board params
+            # param stream now includes non-board params (batched per 50ms)
             await loop.run_in_executor(
                 None, core._on_osc_param, "SecretParam", "Float", 0.42)
             msg = await recv_until(
-                ws, lambda m: m["t"] == "param" and m["name"] == "SecretParam"
-                and m["value"] == 0.42)
-            check("non-board param streamed to guest", msg["ptype"] == "Float")
+                ws, lambda m: m["t"] == "param_batch"
+                and m["params"].get("SecretParam", [None])[0] == 0.42)
+            check("non-board param streamed to guest",
+                  msg["params"]["SecretParam"][1] == "Float")
 
             # disable -> guests told, setp dead again
             await loop.run_in_executor(None, core.set_yolo, False)

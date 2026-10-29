@@ -9,7 +9,8 @@ Two providers:
     reserved *.ngrok-free.app domain) buys a link that never changes across
     app restarts.
 
-Binaries are downloaded once into the data dir on first use.
+Binaries are downloaded once into the data dir on first use, verified against
+a pinned digest before they are ever executed — see managed_binary.
 """
 from __future__ import annotations
 
@@ -17,34 +18,42 @@ import json
 import logging
 import os
 import re
-import shutil
-import stat
 import subprocess
 import sys
 import threading
-import urllib.request
-import zipfile
-from pathlib import Path
 from typing import Callable, Optional
+
+from .managed_binary import Binary, popen
 
 log = logging.getLogger(__name__)
 
-if sys.platform == "win32":
-    CLOUDFLARED_URL = (
-        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
-    )
-    CLOUDFLARED_BINARY="cloudflared.exe"
-    NGROK_ZIP_URL = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
-    NGROK_BINARY="ngrok.exe"
+# To bump: set the version, run tools/pin_binaries.py, paste the digests below.
+CLOUDFLARED_VERSION = "2026.7.3"
+_CLOUDFLARED_DL = ("https://github.com/cloudflare/cloudflared/releases/download/"
+                   f"{CLOUDFLARED_VERSION}/")
 
+# ngrok publishes only a moving "v3-stable" URL — the content changes without
+# the URL changing, so there is no fixed digest to pin against. It stays
+# unverified: an opt-in path that already needs an account and manual setup.
+if sys.platform == "win32":
+    CLOUDFLARED = Binary(
+        "cloudflared", "cloudflared.exe",
+        _CLOUDFLARED_DL + "cloudflared-windows-amd64.exe",
+        sha256="8635da433b6df8194746e88ed9d2589566c20e38bfc2a80e431a348b7c765841")
+    NGROK = Binary(
+        "ngrok", "ngrok.exe",
+        "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip",
+        member="ngrok.exe")
 
 if sys.platform == "linux":
-    CLOUDFLARED_URL = (
-        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
-    )
-    CLOUDFLARED_BINARY="cloudflared"
-    NGROK_ZIP_URL = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.zip"
-    NGROK_BINARY="ngrok"
+    CLOUDFLARED = Binary(
+        "cloudflared", "cloudflared",
+        _CLOUDFLARED_DL + "cloudflared-linux-amd64",
+        sha256="9d71c677db00134c1bd4144b7783486b654ad281b1ea62b4972098d19f770f17")
+    NGROK = Binary(
+        "ngrok", "ngrok",
+        "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.zip",
+        member="ngrok")
 
 TRYCLOUDFLARE_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
@@ -67,7 +76,8 @@ class Tunnel:
     # -- public API ------------------------------------------------------------
 
     def provider(self) -> str:
-        return self.store.settings.get("tunnel_provider") or "cloudflare"
+        # anything but ngrok is the zero-setup quick tunnel
+        return "ngrok" if self.store.settings.get("tunnel_provider") == "ngrok" else "cloudflare"
 
     def status(self) -> dict:
         return {"state": self.state, "url": self.url, "error": self.error,
@@ -77,9 +87,9 @@ class Tunnel:
         with self._lock:
             if self.state in ("downloading", "starting", "online"):
                 return
-            provider = self.provider()
-            have_it = (self._system_exe(provider) is not None
-                       or self._exe_path(provider).exists())
+            binary = self._binary()
+            have_it = (binary.system_path() is not None
+                       or binary.own_path(self.bin_dir).exists())
             self._set("starting" if have_it else "downloading")
         threading.Thread(target=self._start_impl, args=(local_port,), daemon=True).start()
 
@@ -109,19 +119,8 @@ class Tunnel:
         self.state, self.url, self.error, self.progress = state, url, error, progress
         self.on_change(self.status())
 
-    def _exe_path(self, provider: str) -> Path:
-        return self.bin_dir / (NGROK_BINARY if provider == "ngrok" else CLOUDFLARED_BINARY)
-
-    def _system_exe(self, provider: str) -> Optional[Path]:
-        """An already-installed binary on PATH, if there is one.
-
-        Distro packages and winget/scoop installs are just as good as our
-        own copy — using them skips a ~50 MB download and keeps the tool
-        updated by whatever installed it.
-        """
-        name = "ngrok" if provider == "ngrok" else "cloudflared"
-        found = shutil.which(name)
-        return Path(found) if found else None
+    def _binary(self, provider: Optional[str] = None) -> Binary:
+        return NGROK if (provider or self.provider()) == "ngrok" else CLOUDFLARED
 
     def _start_impl(self, local_port: int) -> None:
         provider = self.provider()
@@ -132,16 +131,12 @@ class Tunnel:
                 if not token or not domain:
                     raise RuntimeError(
                         "ngrok needs an authtoken and a static domain — open Link settings.")
-            exe = self._system_exe(provider)  # already installed? use it
-            if exe is not None:
-                log.info("using the %s already on PATH: %s", provider, exe)
-            else:
-                exe = self._exe_path(provider)
-                if not exe.exists():
-                    self._download(provider, exe)
-                if sys.platform != "win32":  # our own copy needs the exec bit
-                    perms = os.stat(exe)
-                    os.chmod(exe, perms.st_mode | stat.S_IEXEC)
+            binary = self._binary(provider)
+            if not binary.verified(self.bin_dir) and binary.system_path() is None:
+                self._set("downloading")
+            exe = binary.resolve(
+                self.bin_dir,
+                on_progress=lambda pct: self._set("downloading", progress=pct))
             self._set("starting")
             self._err_hint = None
             if provider == "ngrok":
@@ -152,42 +147,9 @@ class Tunnel:
             log.exception("tunnel failed")
             self._set("error", error=str(exc))
 
-    # -- downloads -------------------------------------------------------------------
-
-    def _download(self, provider: str, exe: Path) -> None:
-        exe.parent.mkdir(parents=True, exist_ok=True)
-        if provider == "ngrok":
-            log.info("downloading ngrok…")
-            tmp = exe.with_suffix(".zip")
-            self._fetch(NGROK_ZIP_URL, tmp)
-            with zipfile.ZipFile(tmp) as zf:
-                with zf.open(NGROK_BINARY) as src, open(exe, "wb") as dst:
-                    dst.write(src.read())
-            tmp.unlink(missing_ok=True)
-        else:
-            log.info("downloading cloudflared…")
-            tmp = exe.with_suffix(".part")
-            self._fetch(CLOUDFLARED_URL, tmp)
-            tmp.replace(exe)
-        log.info("%s downloaded (%.1f MB)", exe.name, exe.stat().st_size / 1e6)
-
-    def _fetch(self, url: str, dest: Path) -> None:
-        req = urllib.request.Request(url, headers={"User-Agent": "VRCParameterRelay"})
-        with urllib.request.urlopen(req, timeout=60) as res, open(dest, "wb") as fh:
-            total = int(res.headers.get("Content-Length") or 0)
-            done = 0
-            while True:
-                chunk = res.read(1 << 18)
-                if not chunk:
-                    break
-                fh.write(chunk)
-                done += len(chunk)
-                if total:
-                    self._set("downloading", progress=done / total)
-
     # -- cloudflared -----------------------------------------------------------------
 
-    def _spawn_cloudflared(self, exe: Path, local_port: int) -> None:
+    def _spawn_cloudflared(self, exe, local_port: int) -> None:
         proc = self._popen(
             [str(exe), "tunnel", "--url", f"http://127.0.0.1:{local_port}", "--no-autoupdate"])
         threading.Thread(target=self._watch_cloudflared, args=(proc,), daemon=True).start()
@@ -205,7 +167,7 @@ class Tunnel:
 
     # -- ngrok ------------------------------------------------------------------------
 
-    def _spawn_ngrok(self, exe: Path, local_port: int, token: str, domain: str) -> None:
+    def _spawn_ngrok(self, exe, local_port: int, token: str, domain: str) -> None:
         env = {**os.environ, "NGROK_AUTHTOKEN": token}
         proc = self._popen(
             [str(exe), "http", str(local_port), "--url", f"https://{domain}",
@@ -233,10 +195,7 @@ class Tunnel:
     # -- shared plumbing -----------------------------------------------------------------
 
     def _popen(self, cmd: list[str], env: Optional[dict] = None) -> subprocess.Popen:
-        creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            encoding="utf-8", errors="replace", creationflags=creationflags, env=env)
+        proc = popen(cmd, env=env)
         with self._lock:
             self._proc = proc
         return proc

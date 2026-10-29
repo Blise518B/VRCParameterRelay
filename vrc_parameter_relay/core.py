@@ -38,6 +38,51 @@ log = logging.getLogger(__name__)
 
 CONTROL_KINDS = ("toggle", "button", "slider", "int")
 
+# which control kinds make sense for each parameter type. An Int can be a
+# toggle / hold button the way VRChat's own menu does it: ON sets the
+# parameter to the control's value, OFF (or letting go) sets it back.
+KINDS_FOR_PTYPE = {
+    "Bool": ("toggle", "button"),
+    "Int": ("int", "slider", "toggle", "button"),
+    "Float": ("slider",),
+}
+INT_MIN, INT_MAX = 0, 255  # VRChat's Int parameter range
+
+
+def _clamp_int(value: Any, default: int) -> int:
+    try:
+        return max(INT_MIN, min(INT_MAX, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return default
+
+
+def int_switch_values(control: dict) -> tuple[int, int]:
+    """(value sent when ON / held, value sent when OFF / released) for an Int
+    toggle or hold button. A toggle shows ON while the parameter equals the
+    ON value, so several toggles on one Int behave like VRChat's radial menu
+    (Outfit = 1, Outfit = 2, ...)."""
+    return (_clamp_int(control.get("on"), 1), _clamp_int(control.get("off"), 0))
+
+
+def retype_control(control: dict, ptype: str) -> None:
+    """Adapt a control to a parameter whose type changed (an avatar update
+    turned a Bool toggle into an Int, say). Sending the old type does nothing
+    in VRChat, so the control follows the avatar."""
+    old_ptype = control.get("ptype")
+    control["ptype"] = ptype
+    kind = control.get("kind")
+    if kind not in KINDS_FOR_PTYPE.get(ptype, ()):
+        kind = control["kind"] = AppCore.default_kind(ptype)
+    if kind in ("slider", "int") and (old_ptype != ptype or "min" not in control):
+        control["min"] = 0
+        control["max"] = 1 if ptype == "Float" else INT_MAX
+    if ptype == "Int" and kind in ("toggle", "button") and "on" not in control:
+        # a Bool toggle becoming an Int one keeps its meaning: ON -> 1
+        inverted = bool(control.get("invert"))
+        control["on"], control["off"] = (0, 1) if inverted else (1, 0)
+    if ptype != "Bool":
+        control.pop("invert", None)
+
 
 class AppCore:
     def __init__(self, store: Store, link) -> None:
@@ -167,8 +212,12 @@ class AppCore:
 
     def rename_avatar(self, name: str) -> None:
         with self._lock:
-            self.profile["name"] = (str(name)[:80]
-                                    or short_avatar_name(self.avatar_id or "?"))
+            new = str(name)[:80] or short_avatar_name(self.avatar_id or "?")
+            if new == self.profile.get("name"):
+                # the name field fires on every focus-out; a rebuild here
+                # destroyed the control the user was clicking on
+                return
+            self.profile["name"] = new
             self._save()  # naming an avatar is what keeps it in the library
         self._emit_board()
 
@@ -219,11 +268,28 @@ class AppCore:
             if changed:
                 # keep the parameter list for offline editing
                 self.profile["params"] = {n: p["ptype"] for n, p in self.params.items()}
+            retyped = self._sync_control_types()
+            if changed or retyped:
                 self._save()
         if changed:
             log.info("OSCQuery sync: %d parameters", len(params))
             self.emit({"t": "params_reset", "params": snapshot})
+        if changed or retyped:
             self._emit_board()  # push fresh values to guests too
+
+    def _sync_control_types(self) -> bool:
+        """Controls (in every preset) follow the parameter types VRChat
+        reports. Returns True if any control changed. Caller holds the lock."""
+        retyped = False
+        for preset in self.profile["presets"]:
+            for control in preset["controls"]:
+                live = (self.params.get(control["param"]) or {}).get("ptype")
+                if live in KINDS_FOR_PTYPE and live != control.get("ptype"):
+                    log.info("control %s: parameter is now %s (was %s)",
+                             control["param"], live, control.get("ptype"))
+                    retype_control(control, live)
+                    retyped = True
+        return retyped
 
     # -- values ---------------------------------------------------------------
 
@@ -258,6 +324,9 @@ class AppCore:
                 value = bool(value)
                 if control.get("invert"):
                     value = not value  # control shows/receives the flipped state
+            elif ptype == "Int" and control.get("kind") in ("toggle", "button"):
+                on, off = int_switch_values(control)
+                value = on if bool(value) else off  # value = the switch state
             elif ptype in ("Int", "Float"):
                 value = float(value)
                 lo, hi = control.get("min"), control.get("max")
@@ -271,7 +340,7 @@ class AppCore:
             return False
         ok = self.link.send_param(control["param"], ptype, value)
         if ok:
-            self._on_osc_param(control["param"], ptype, value)  # optimistic echo
+            self._echo_param(control["param"], ptype, value)
         return ok
 
     def set_param_direct(self, name: str, ptype: str, value: Any) -> bool:
@@ -280,8 +349,16 @@ class AppCore:
             return False
         ok = self.link.send_param(name, ptype, value)
         if ok:
-            self._on_osc_param(name, ptype, value)
+            self._echo_param(name, ptype, value)
         return ok
+
+    def _echo_param(self, name: str, ptype: str, value: Any) -> None:
+        """Optimistic echo for values WE sent. Unlike _on_osc_param it always
+        emits: a set that lands on the current value still needs its delta —
+        it is the only confirmation web clients get for a set_value."""
+        with self._lock:
+            self.params[name] = {"ptype": ptype, "value": value}
+        self.emit({"t": "param", "name": name, "ptype": ptype, "value": value})
 
     # -- board edits (host only) --------------------------------------------------
 
@@ -290,12 +367,29 @@ class AppCore:
         """The control type used when adding a parameter without asking."""
         return {"Bool": "toggle", "Int": "int", "Float": "slider"}.get(ptype, "slider")
 
+    def param_type(self, name: str) -> Optional[str]:
+        """The type VRChat reports for a parameter (None if unknown)."""
+        with self._lock:
+            return (self.params.get(name) or {}).get("ptype")
+
+    def next_on_value(self, param: str, exclude: Optional[str] = None) -> int:
+        """Suggested ON value for a new Int toggle/button on `param`: the
+        lowest value no other toggle/button for it uses yet, so adding the
+        same Int three times gives Outfit = 1, 2, 3."""
+        with self._lock:
+            used = {int_switch_values(c)[0] for c in self.board["controls"]
+                    if c["param"] == param and c["id"] != exclude
+                    and c.get("ptype") == "Int" and c.get("kind") in ("toggle", "button")}
+        return next((v for v in range(1, INT_MAX + 1) if v not in used), 1)
+
     def add_control(self, param: str, kind: str, label: Optional[str] = None,
                     vmin: Optional[float] = None, vmax: Optional[float] = None,
                     category: Optional[str] = None, invert: bool = False,
-                    index: Optional[int] = None) -> Optional[dict]:
+                    index: Optional[int] = None, on: Optional[int] = None,
+                    off: Optional[int] = None) -> Optional[dict]:
         if kind not in CONTROL_KINDS:
             return None
+        on_default = self.next_on_value(param)
         with self._lock:
             if not self.avatar_id:
                 return None
@@ -303,6 +397,8 @@ class AppCore:
             ptype = {"toggle": "Bool", "button": "Bool", "slider": "Float", "int": "Int"}[kind]
             if info.get("ptype"):
                 ptype = info["ptype"]
+            if kind not in KINDS_FOR_PTYPE.get(ptype, CONTROL_KINDS):
+                kind = self.default_kind(ptype)  # e.g. a stepper for a Bool
             cat_ids = {c["id"] for c in self.board["categories"]}
             cat = category if category in cat_ids else self.board["categories"][0]["id"]
             control = {
@@ -318,6 +414,9 @@ class AppCore:
                 control["max"] = vmax if vmax is not None else (1 if kind == "slider" else 255)
             if ptype == "Bool" and invert:
                 control["invert"] = True
+            if ptype == "Int" and kind in ("toggle", "button"):
+                control["on"] = _clamp_int(on, on_default)
+                control["off"] = _clamp_int(off, 0)
             controls = self.board["controls"]
             siblings = [i for i, c in enumerate(controls) if c["cat"] == cat]
             if index is None or index >= len(siblings):
@@ -334,9 +433,21 @@ class AppCore:
             control = next((c for c in self.board["controls"] if c["id"] == control_id), None)
             if not control:
                 return False
+            live = (self.params.get(control["param"]) or {}).get("ptype")
+            if live in KINDS_FOR_PTYPE and live != control.get("ptype"):
+                retype_control(control, live)  # edit against the avatar's real type
+            if changes.get("kind") not in KINDS_FOR_PTYPE.get(control["ptype"], CONTROL_KINDS):
+                changes.pop("kind", None)
             for key in ("label", "min", "max", "kind", "invert"):
                 if key in changes and changes[key] is not None:
                     control[key] = changes[key]
+            if control["ptype"] != "Bool":
+                control.pop("invert", None)
+            if control["ptype"] == "Int" and control["kind"] in ("toggle", "button"):
+                on = changes.get("on", control.get("on"))
+                off = changes.get("off", control.get("off"))
+                control["on"] = _clamp_int(on, self.next_on_value(control["param"], control_id))
+                control["off"] = _clamp_int(off, 0)
             self._save()
         self._emit_board()
         return True
@@ -404,6 +515,10 @@ class AppCore:
         return True
 
     def rename_category(self, cat_id: str, name: str) -> bool:
+        with self._lock:
+            cat = next((c for c in self.board["categories"] if c["id"] == cat_id), None)
+            if cat is None or (str(name)[:60] or cat["name"]) == cat["name"]:
+                return False  # focus-out without an edit — no save, no rebuild
         return self._edit_category(cat_id, lambda c: c.update(name=str(name)[:60] or c["name"]))
 
     def set_category_locked(self, cat_id: str, locked: bool) -> bool:
@@ -591,3 +706,13 @@ class AppCore:
         token = self.store.regenerate_admin_token()
         self.emit({"t": "admin_token", "token": token})
         return token
+
+    def share_password(self) -> str:
+        """The spoken password guests type at the bare public address."""
+        return str(self.store.settings.get("share_password") or "")
+
+    def regenerate_share_password(self) -> str:
+        """A new password for future sign-ins. Browsers already signed in
+        stay signed in — their cookie carries the TOKEN, so regenerate_token
+        ("Reset link") is what kicks everyone."""
+        return self.store.regenerate_share_password()
