@@ -2,9 +2,18 @@
 new version (Help → What's new opens it again).
 
 A fresh install never sees it — store.py marks the version seen on first
-run. Rewrite HEADLINE and ALSO_NEW for every release that should show it.
+run. It shows once per feature release (1.4, 1.5 …). A bug-fix release
+(1.4.1) has nothing new to show, so it doesn't open the panel again for
+someone who saw 1.4's.
+
+So far 1.4 is the only release with news. When 1.5 adds its own, don't
+overwrite 1.4's: someone jumping from 1.3 to 1.5 should get both. Keep
+each release's HEADLINE / ALSO_NEW and page through every release newer
+than last_seen_version (newest first, Back / Next), not just the newest.
 """
 from __future__ import annotations
+
+from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -12,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME, __version__
+from ..updater import parse_version
 from .theme import accent_of
 
 HEADLINE = ("🔗", "One fixed link",
@@ -41,8 +51,15 @@ ALSO_NEW = (
 )
 
 
+def feature_release(version) -> Optional[tuple[int, ...]]:
+    """'1.4.1' -> (1, 4): the release whose news the panel carries."""
+    parsed = parse_version(version)
+    return parsed[:2] if parsed else None
+
+
 def should_show(settings: dict) -> bool:
-    return settings.get("last_seen_version") != __version__
+    seen = feature_release(settings.get("last_seen_version"))
+    return seen is None or seen != feature_release(__version__)
 
 
 class WhatsNewDialog(QDialog):
@@ -58,7 +75,9 @@ class WhatsNewDialog(QDialog):
         lay.setSpacing(14)
         lay.setContentsMargins(22, 20, 22, 18)
 
-        eyebrow = QLabel(f"WHAT'S NEW IN v{__version__}")
+        release = feature_release(__version__)
+        shown = ".".join(str(n) for n in release) if release else __version__
+        eyebrow = QLabel(f"WHAT'S NEW IN v{shown}")
         eyebrow.setStyleSheet("color:#7f8f81; font-size:11px; letter-spacing:1.5px;")
         lay.addWidget(eyebrow)
 

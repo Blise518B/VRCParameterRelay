@@ -195,6 +195,13 @@ def main() -> int:
     win._show_whats_new = lambda: None
     store.set("last_seen_version", __version__)
     check("seen once: not again", not should_show(store.settings))
+    major, minor = (int(n) for n in __version__.split(".")[:2])
+    check("a bug-fix release of the same version doesn't show it again",
+          not should_show({"last_seen_version": f"{major}.{minor}.99"}))
+    check("...but coming from an older feature release does",
+          should_show({"last_seen_version": f"{major}.{max(minor - 1, 0)}.9"})
+          or minor == 0)
+    check("...and an unknown last-seen version does", should_show({"last_seen_version": ""}))
 
     # an update that already has an own address: no switch to offer
     store.set("share_method", "tunnel")
