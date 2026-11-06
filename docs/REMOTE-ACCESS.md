@@ -193,6 +193,49 @@ anyone you share the link with can see it. Option A hides it.
 
 ---
 
+## Headless: the same settings without the Share window
+
+`--headless` runs the relay with no window (a server, a Docker container, a
+Linux box without a desktop). It reads the same `settings.json` the window
+writes, so everything above is set in that file instead:
+
+1. Start it once with `--headless` (the Windows exe, the AppImage, or
+   `python -m vrc_parameter_relay`) and stop it again. The first start writes
+   a complete `settings.json`, with a fresh password and tokens.
+2. Edit the file **while the relay is stopped**. A running relay rewrites it
+   whenever a setting changes, so edits made in the meantime can be lost.
+3. Start it again. Sharing starts on its own, and the log prints the address,
+   password, one-click link and admin link.
+
+**Where the file is:** `%APPDATA%\VRCParameterRelay\settings.json` on
+Windows, `~/.config/VRCParameterRelay/settings.json` on Linux, or the folder
+in `VRC_PARAMETER_RELAY_DATA_DIR` if that's set. In Docker, set that variable
+and mount the folder as a volume, so boards and settings survive the
+container.
+
+| Key | What it does | In the window |
+|---|---|---|
+| `public_url` | Your own address, e.g. `"https://relay.example.com"`. Set: no tunnel or fixed link, and the web server listens on **all interfaces** (IPv4 and IPv6), so a reverse proxy on another machine can reach it. `""` = share through `share_method` instead | Share → Your own address |
+| `web_port` | Port of that web server (default `3080`) — what your proxy points at | — (file only) |
+| `share_password` | The password on the door. Empty it and the next start makes a new one | New password |
+| `share_method` | `"fixed"` (the fixed link) or `"tunnel"` (Cloudflare / ngrok). Only used while `public_url` is empty | Link settings |
+| `tunnel_provider`, `ngrok_authtoken`, `ngrok_domain` | `"cloudflare"` or `"ngrok"`, plus ngrok's token and static domain | Link settings |
+| `trusted_proxy` | A proxy outside this machine and the LAN whose `X-Forwarded-For` is believed (see above) | — |
+| `require_guest_names` | `true`: guests pick a name before they can press anything | Share window |
+| `guest_token` | The secret behind every link. Empty it and the next start makes a new one: the same as **Reset link** | Reset link |
+| `admin_enabled`, `admin_public` | Serve the admin panel at all; and whether it may be reached through the public address (off by default — leave it off unless you mean it) | Share → Admin panel |
+
+The admin panel (link in the log) edits boards and turns sharing on and off
+from a browser; the settings in this table stay in the file for now.
+
+**The relay still has to run on the same PC as VRChat.** Desktop VRChat
+only talks OSC to programs on the same machine. In Docker that means
+`--network host`: on Docker's own network, `127.0.0.1` inside the container
+isn't the PC that runs VRChat, and VRChat's discovery (mDNS) doesn't reach
+the container either.
+
+---
+
 ## When it doesn't work
 
 | Symptom | Cause |

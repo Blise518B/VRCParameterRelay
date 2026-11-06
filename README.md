@@ -50,6 +50,9 @@ unsigned exe — *More info → Run anyway*.
 ## Good to know
 
 - Settings and boards live in `%APPDATA%\VRCParameterRelay`
+  (`~/.config/VRCParameterRelay` on Linux)
+- `--headless` runs it without a window; its settings go in `settings.json`
+  ([which ones](docs/REMOTE-ACCESS.md#headless-the-same-settings-without-the-share-window))
 - The app has to run on the same PC as VRChat
 - The fixed link works while the app is running and sharing; when it's
   closed, the page waits and connects by itself once you're back

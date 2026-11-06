@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
@@ -357,7 +357,41 @@ class ShareDialog(QDialog):
         self.admin_btn.setText(("▾  " if self._admin_open else "▸  ")
                                + "Admin panel — edit the board from a browser")
         self.admin_box.setVisible(self._admin_open)
-        self.adjustSize()
+        self._fit(shrink=True)
+
+    def _fit(self, shrink: bool = False) -> None:
+        """Make the window tall enough for everything in it.
+
+        adjustSize() alone comes up short here: it measures the word-wrapped
+        text at one width and may then narrow the window to fit the screen,
+        and the contents change after it runs (the own address fills in
+        _refresh(), tunnel and admin states arrive later, even while the
+        window is closed). Too short a window squeezes the fold-outs into
+        each other. ``shrink`` also drops leftover height (fold closed)."""
+        lay = self.layout()
+        lay.activate()
+        if shrink:
+            self.adjustSize()
+        width = self.width()
+        need = (lay.totalHeightForWidth(width) if lay.hasHeightForWidth()
+                else lay.totalSizeHint().height())
+        screen = self.screen()
+        if screen is not None:
+            need = min(need, screen.availableGeometry().height())
+        if need > self.height():
+            self.resize(width, need)
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        self._fit(shrink=True)  # whatever changed while it was closed
+
+    def event(self, event) -> bool:  # noqa: N802 (Qt override)
+        handled = super().event(event)
+        # a label's text or a row's visibility changed while open: grow (never
+        # shrink, so a window the user made bigger stays that way)
+        if event.type() == QEvent.Type.LayoutRequest and self.isVisible():
+            self._fit()
+        return handled
 
     def _refresh_admin_scope_note(self, public: bool) -> None:
         self.admin_public_note.setText(
