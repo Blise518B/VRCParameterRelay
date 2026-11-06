@@ -6,11 +6,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+# a fresh data dir each run: never the real %APPDATA% settings and profiles,
+# and no controls left on avtr_admin_test by an earlier run
+os.environ["VRC_PARAMETER_RELAY_DATA_DIR"] = tempfile.mkdtemp(prefix="vrcpr-admin-")
 
 import aiohttp
 

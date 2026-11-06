@@ -4,10 +4,15 @@ Safe to run while VRChat is open. Exits 0 on success.
 """
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+# a fresh data dir each run: never the real %APPDATA% profiles, and no
+# leftovers from an earlier run (a first category already named "Toggles")
+os.environ["VRC_PARAMETER_RELAY_DATA_DIR"] = tempfile.mkdtemp(prefix="vrcpr-logic-")
 
 from vrc_parameter_relay.core import AppCore
 from vrc_parameter_relay.store import Store, normalize_profile

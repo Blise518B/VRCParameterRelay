@@ -9,11 +9,15 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# a fresh data dir each run: never the real %APPDATA% settings, and
+# write_manifest() must not overwrite the real SteamVR manifest
+os.environ["VRC_PARAMETER_RELAY_DATA_DIR"] = tempfile.mkdtemp(prefix="vrcpr-tray-")
 
 
 def check(desc: str, cond: bool) -> None:

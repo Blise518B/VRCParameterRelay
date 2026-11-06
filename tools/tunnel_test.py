@@ -6,7 +6,9 @@ download/spawn code path as the Share button in the app.
 from __future__ import annotations
 
 import logging
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -16,9 +18,15 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(name)s: %(mess
 
 from vrc_parameter_relay.core import AppCore
 from vrc_parameter_relay.osc_link import VrcLink
-from vrc_parameter_relay.store import Store
+from vrc_parameter_relay.store import Store, data_dir
 from vrc_parameter_relay.tunnel import Tunnel
 from vrc_parameter_relay.webserver import GuestServer
+
+# the app's own binary cache: reuse its pinned cloudflared instead of
+# downloading a fresh copy into every throwaway folder
+REAL_BIN_DIR = data_dir() / "bin"
+# a fresh data dir each run: never the real %APPDATA% settings and profiles
+os.environ["VRC_PARAMETER_RELAY_DATA_DIR"] = tempfile.mkdtemp(prefix="vrcpr-tunnel-")
 
 
 def main() -> None:
@@ -27,6 +35,7 @@ def main() -> None:
     core = AppCore(store, link)
     web = GuestServer(core, store.settings["web_port"])
     tunnel = Tunnel(store)
+    tunnel.bin_dir = REAL_BIN_DIR
     core.set_sharing(True)
     tunnel.on_change = lambda st: print(f"[tunnel] {st}", flush=True)
 

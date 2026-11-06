@@ -8,13 +8,17 @@ Safe to run while VRChat is open. Covers:
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+# a fresh data dir each run: never the real %APPDATA% settings and profiles
+os.environ["VRC_PARAMETER_RELAY_DATA_DIR"] = tempfile.mkdtemp(prefix="vrcpr-sync-")
 
 from vrc_parameter_relay.core import AppCore
 from vrc_parameter_relay.osc_link import VrcLink

@@ -7,11 +7,15 @@ Exits 0 on success.
 from __future__ import annotations
 
 import logging
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+# a fresh data dir each run: never the real %APPDATA% settings and profiles
+os.environ["VRC_PARAMETER_RELAY_DATA_DIR"] = tempfile.mkdtemp(prefix="vrcpr-integration-")
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(name)s: %(message)s")
 
