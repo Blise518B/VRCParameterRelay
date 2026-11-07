@@ -8,7 +8,10 @@ Mirrors real client behaviour:
   * receives OSC on its own port, prints "RECV SET ..." lines and echoes
     the new value back out (VRChat re-broadcasts changed parameters)
 
-Run:  python tools/fake_vrchat.py
+Run:  python tools/fake_vrchat.py            (desktop VRChat: loopback only)
+      python tools/fake_vrchat.py --remote   (the Android build — Quest standalone,
+          phones: binds and advertises this machine's LAN address, never
+          loopback, and sends OSC only to apps that give it a LAN address)
 """
 from __future__ import annotations
 
@@ -63,8 +66,21 @@ def log(*args) -> None:
     print(*args, flush=True)
 
 
+def lan_ip() -> str:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    finally:
+        s.close()
+
+
 class FakeVRChat:
-    def __init__(self) -> None:
+    def __init__(self, remote: bool = False) -> None:
+        # remote: behave like VRChat on a Quest/phone — everything on the
+        # LAN address, as if this were another device on the network
+        self.remote = remote
+        self.ip = lan_ip() if remote else "127.0.0.1"
         self.subscribers: dict[str, SimpleUDPClient] = {}  # "host:port" -> client
         self.lock = threading.Lock()
         self.current = 0     # avatar being "worn" (OSC side)
@@ -72,11 +88,11 @@ class FakeVRChat:
 
         dispatcher = Dispatcher()
         dispatcher.set_default_handler(self.on_osc)
-        self.osc_server = ThreadingOSCUDPServer(("127.0.0.1", 0), dispatcher)
+        self.osc_server = ThreadingOSCUDPServer((self.ip, 0), dispatcher)
         self.osc_port = self.osc_server.socket.getsockname()[1]
 
         handler = type("H", (Handler,), {"fake": self})
-        self.http_server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.http_server = ThreadingHTTPServer((self.ip, 0), handler)
         self.http_port = self.http_server.server_address[1]
 
         self.zc = Zeroconf()
@@ -85,7 +101,7 @@ class FakeVRChat:
         threading.Thread(target=self.osc_server.serve_forever, daemon=True).start()
         threading.Thread(target=self.http_server.serve_forever, daemon=True).start()
 
-        addresses = [socket.inet_aton("127.0.0.1")]
+        addresses = [socket.inet_aton(self.ip)]
         for svc_type, port in (("_oscjson._tcp.local.", self.http_port),
                                ("_osc._udp.local.", self.osc_port)):
             info = ServiceInfo(
@@ -94,7 +110,8 @@ class FakeVRChat:
                 server="fake-vrchat.local.",
             )
             self.zc.register_service(info, allow_name_change=True)
-        log(f"[fake] advertising VRChat-Client-FAKE  http:{self.http_port}  osc:{self.osc_port}")
+        log(f"[fake] advertising VRChat-Client-FAKE  http:{self.http_port}  osc:{self.osc_port}"
+            f"  on {self.ip}{'  (remote mode)' if self.remote else ''}")
 
         ServiceBrowser(self.zc, "_oscjson._tcp.local.", self)
         threading.Thread(target=self.wiggle, daemon=True).start()
@@ -107,7 +124,17 @@ class FakeVRChat:
         info = zc.get_service_info(svc_type, name, timeout=3000)
         if not info or not info.port:
             return
-        threading.Thread(target=self.subscribe, args=(name, info.port), daemon=True).start()
+        host = "127.0.0.1"
+        if self.remote:
+            # another device can't reach an app's loopback address
+            lan = [a for a in info.parsed_addresses()
+                   if ":" not in a and not a.startswith("127.")]
+            if not lan:
+                log(f"[fake] {name} advertises no LAN address — unreachable")
+                return
+            host = lan[0]
+        threading.Thread(target=self.subscribe, args=(name, host, info.port),
+                         daemon=True).start()
 
     def update_service(self, *a) -> None:
         pass
@@ -118,9 +145,9 @@ class FakeVRChat:
                 del self.subscribers[key]
         log(f"[fake] unsubscribed {name}")
 
-    def subscribe(self, name: str, http_port: int) -> None:
+    def subscribe(self, name: str, host: str, http_port: int) -> None:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{http_port}/?HOST_INFO", timeout=4) as res:
+            with urllib.request.urlopen(f"http://{host}:{http_port}/?HOST_INFO", timeout=4) as res:
                 host_info = json.loads(res.read().decode())
         except Exception as exc:
             log(f"[fake] HOST_INFO fetch failed for {name}: {exc}")
@@ -128,14 +155,18 @@ class FakeVRChat:
         osc_port = host_info.get("OSC_PORT")
         if not osc_port:
             return
+        osc_ip = str(host_info.get("OSC_IP") or "127.0.0.1")
+        if self.remote and osc_ip.startswith("127."):
+            log(f"[fake] {name} says send OSC to {osc_ip} — unreachable from another device")
+            return
         key = f"{name}|{osc_port}"
         with self.lock:
             if key in self.subscribers:
                 return
-            client = SimpleUDPClient("127.0.0.1", int(osc_port))
+            client = SimpleUDPClient(osc_ip if self.remote else "127.0.0.1", int(osc_port))
             self.subscribers[key] = client
             avatar = AVATARS[self.current]
-        log(f"[fake] subscribed {name} -> osc port {osc_port} "
+        log(f"[fake] subscribed {name} -> {osc_ip if self.remote else '127.0.0.1'}:{osc_port} "
             f"(app: {host_info.get('NAME')})")
         time.sleep(0.3)
         client.send_message("/avatar/change", avatar["id"])
@@ -238,7 +269,7 @@ class FakeVRChat:
     def host_info(self) -> dict:
         return {
             "NAME": "VRChat-Client-FAKE",
-            "OSC_IP": "127.0.0.1",
+            "OSC_IP": self.ip,
             "OSC_PORT": self.osc_port,
             "OSC_TRANSPORT": "UDP",
             "EXTENSIONS": {"ACCESS": True, "VALUE": True, "TYPE": True},
@@ -278,9 +309,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--switch", type=float, metavar="SECONDS", default=0,
                         help="switch between two avatars every N seconds")
+    parser.add_argument("--remote", action="store_true",
+                        help="act like VRChat on a Quest/phone: LAN address only")
     cli = parser.parse_args()
 
-    fake = FakeVRChat()
+    fake = FakeVRChat(remote=cli.remote)
     fake.start()
     log("[fake] running — Ctrl+C to stop")
 

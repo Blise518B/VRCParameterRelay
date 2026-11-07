@@ -18,8 +18,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 os.environ["VRC_PARAMETER_RELAY_DATA_DIR"] = tempfile.mkdtemp(prefix="vrcpr-fixui-")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# real font metrics for the What's new fit checks (offscreen Qt has none)
+if os.path.isdir("C:/Windows/Fonts"):
+    os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 from vrc_parameter_relay import __version__  # noqa: E402
 from vrc_parameter_relay.core import AppCore  # noqa: E402
@@ -107,10 +110,22 @@ def window(store):
     return MainWindow(core, tun, StubWeb(), fixed), core, tun, fixed
 
 
+def fits(dialog) -> bool:
+    """Every wrapped label on the shown page is as tall as its text needs,
+    and the buttons are inside the window."""
+    for label in dialog.findChildren(QLabel):
+        if label.isVisible() and label.wordWrap() and \
+                label.height() < label.heightForWidth(label.width()):
+            return False
+    return dialog.close_btn.geometry().bottom() <= dialog.height()
+
+
 def main() -> int:
     qapp = QApplication.instance() or QApplication([])
     from vrc_parameter_relay.ui.dialogs import LinkSettingsDialog
-    from vrc_parameter_relay.ui.whats_new import WhatsNewDialog, should_show
+    from vrc_parameter_relay.ui.whats_new import (
+        RELEASES, WhatsNewDialog, feature_release, should_show, unseen,
+    )
 
     # -- a new install ------------------------------------------------------------
     store = Store()
@@ -184,7 +199,31 @@ def main() -> int:
     check("update: What's new is due", should_show(store.settings))
     win.show()
     qapp.processEvents()
-    news = WhatsNewDialog(win)
+    pages = unseen(store.settings)
+    check("from before What's new existed: every release's page, newest first",
+          [r.version for r in pages] == [r.version for r in RELEASES] and len(pages) >= 2)
+    news = WhatsNewDialog(win, pages)
+    news.show()
+    qapp.processEvents()
+    check("it opens on the newest release, with Next and no Back",
+          news.index == 0 and news.next_btn.isEnabled() and not news.back_btn.isEnabled()
+          and news.page_label.text() == f"1 of {len(pages)}")
+    check("...and the newest page fits its window", fits(news))
+    heights = [news.height()]
+    for _ in pages[1:]:
+        news.next_btn.click()
+        qapp.processEvents()
+        heights.append(news.height())
+        check(f"Next: page {news.index + 1} alone is shown, and fits",
+              [p.isVisible() for p in news.pages]
+              == [i == news.index for i in range(len(pages))] and fits(news))
+    check("each page sizes the window to itself", len(set(heights)) > 1)
+    check("the last page has no Next, and Enter closes", not news.next_btn.isEnabled()
+          and news.close_btn.isDefault())
+    news.back_btn.click()
+    check("Back goes to the newer page", news.index == len(pages) - 2)
+    check("the switch to the fixed link sits on the 1.4 page",
+          news.switch_box.parent() is news.pages[[r.version for r in pages].index((1, 4))])
     check("What's new offers the switch", not news.switch_box.isHidden())
     win.start_sharing()
     check("(sharing through the tunnel)", tun.started == [3080] and fixed.starts == 0)
@@ -202,6 +241,20 @@ def main() -> int:
           should_show({"last_seen_version": f"{major}.{max(minor - 1, 0)}.9"})
           or minor == 0)
     check("...and an unknown last-seen version does", should_show({"last_seen_version": ""}))
+    check("the current feature release has a page of its own",
+          RELEASES[0].version == feature_release(__version__))
+    check("pages are newest first, one per feature release",
+          [r.version for r in RELEASES]
+          == sorted({r.version for r in RELEASES}, reverse=True))
+    if minor:
+        check("from the previous feature release: only this release's page",
+              [r.version for r in unseen({"last_seen_version": f"{major}.{minor - 1}.9"})]
+              == [(major, minor)])
+    check("a downgrade shows nothing", not should_show({"last_seen_version": "99.0.0"}))
+    single = WhatsNewDialog(win, unseen({"last_seen_version": f"{major}.{minor - 1}.9"}))
+    check("one page: no Back / Next", len(single.pages) == 1
+          and single.back_btn.isHidden() and single.next_btn.isHidden())
+    check("Help -> What's new: every release", len(WhatsNewDialog(win).pages) == len(RELEASES))
 
     # an update that already has an own address: no switch to offer
     store.set("share_method", "tunnel")

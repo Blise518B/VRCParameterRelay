@@ -197,7 +197,23 @@ anyone you share the link with can see it. Option A hides it.
 
 `--headless` runs the relay with no window (a server, a Docker container, a
 Linux box without a desktop). It reads the same `settings.json` the window
-writes, so everything above is set in that file instead:
+writes.
+
+**The easy way: the admin panel.** The log prints the admin link. Its
+**⚙ Settings** has everything from the Share window and Link settings: how
+friends reach your board (fixed link, Cloudflare, ngrok, your own address),
+the password, guest names, Reset link, the web server's port, and the
+VRChat connection (another device, fixed OSC ports). Changes apply right
+away: no restart, and the log prints the new links.
+
+The admin panel never answers through the public link (unless
+`admin_public` is on). By default it's on **this machine only** — on a box
+without a screen, open it from another computer by setting
+`"web_lan": true` in `settings.json` once (or its switch in ⚙ Settings /
+Link settings → *Network & ports*); the log then prints a LAN admin link.
+An own address (`public_url`) opens the web server to the LAN anyway.
+
+**Or edit the file:**
 
 1. Start it once with `--headless` (the Windows exe, the AppImage, or
    `python -m vrc_parameter_relay`) and stop it again. The first start writes
@@ -216,23 +232,57 @@ container.
 | Key | What it does | In the window |
 |---|---|---|
 | `public_url` | Your own address, e.g. `"https://relay.example.com"`. Set: no tunnel or fixed link, and the web server listens on **all interfaces** (IPv4 and IPv6), so a reverse proxy on another machine can reach it. `""` = share through `share_method` instead | Share → Your own address |
-| `web_port` | Port of that web server (default `3080`) — what your proxy points at | — (file only) |
+| `web_port` | Port of that web server (default `3080`) — what your proxy points at | Link settings → Network & ports |
+| `web_lan` | `true`: the web server (board and admin panel) is reachable from your LAN even without an own address — for managing a headless box from another computer | Link settings → Network & ports |
 | `share_password` | The password on the door. Empty it and the next start makes a new one | New password |
 | `share_method` | `"fixed"` (the fixed link) or `"tunnel"` (Cloudflare / ngrok). Only used while `public_url` is empty | Link settings |
 | `tunnel_provider`, `ngrok_authtoken`, `ngrok_domain` | `"cloudflare"` or `"ngrok"`, plus ngrok's token and static domain | Link settings |
 | `trusted_proxy` | A proxy outside this machine and the LAN whose `X-Forwarded-For` is believed (see above) | — |
 | `require_guest_names` | `true`: guests pick a name before they can press anything | Share window |
 | `guest_token` | The secret behind every link. Empty it and the next start makes a new one: the same as **Reset link** | Reset link |
-| `admin_enabled`, `admin_public` | Serve the admin panel at all; and whether it may be reached through the public address (off by default — leave it off unless you mean it) | Share → Admin panel |
+| `osc_remote` | `true`: VRChat on **another device** (Quest standalone, Android phone) may connect — see below | Link settings → Network & ports |
+| `osc_in_port`, `oscquery_port` | Fixed ports for the relay's OSC input (UDP) and OSCQuery server (TCP); `0` = a free port each start. 1024–65535; not 9000/9001 (VRChat's own) | Link settings → Network & ports |
+| `admin_enabled`, `admin_public` | Serve the admin panel at all; and whether it may be reached through the public address (off by default — leave it off unless you mean it) | — (file only) |
 
-The admin panel (link in the log) edits boards and turns sharing on and off
-from a browser; the settings in this table stay in the file for now.
+Everything in this table except `trusted_proxy`, `guest_token` and the
+admin switches can also be changed in the admin panel's **⚙ Settings**.
 
-**The relay still has to run on the same PC as VRChat.** Desktop VRChat
-only talks OSC to programs on the same machine. In Docker that means
+**Desktop VRChat needs the relay on the same PC.** Desktop VRChat only
+talks OSC to programs on its own machine. In Docker that means
 `--network host`: on Docker's own network, `127.0.0.1` inside the container
 isn't the PC that runs VRChat, and VRChat's discovery (mDNS) doesn't reach
-the container either.
+the container either. A Quest or phone is different — next section.
+
+## VRChat on a Quest or phone (another device)
+
+VRChat's Android build — Quest standalone, Android phones — announces itself
+on your network. Turn on **VRChat on another device** (Link settings →
+*Network & ports*, the admin panel's ⚙ Settings, or `osc_remote` in the
+file) and the relay can run on any PC or server on the **same network**:
+
+* it listens for OSC and OSCQuery on every interface instead of only this
+  machine, and talks to VRChat at the address VRChat announces;
+* it talks to **one** VRChat at a time — the first it finds — and stays with
+  it while it answers, so a second device (or anything else announcing itself
+  as VRChat) can't take over the board; it switches when that one leaves;
+* it accepts OSC only from that VRChat's address and this machine. That keeps
+  stray traffic out, but it is not a lock: on a network you don't trust,
+  someone could still fake it. Use this on your own home network.
+
+Things to know:
+
+* **Same network, mDNS allowed.** Both devices must be on the same Wi-Fi/LAN,
+  and the network must pass mDNS (some guest and mesh networks block it).
+  In Docker: `--network host`.
+* **Firewall.** The relay's ports must be reachable from the Quest. On
+  Windows, allow the app on private networks. On Linux with ufw or firewalld,
+  which open *ports*, set fixed ports and open them: the OSC port (UDP) and
+  the OSCQuery port (TCP).
+* **Phones with mobile data on** may announce the wrong address (VRChat
+  bug), so the relay can't reach them — turn mobile data off while
+  playing.
+* Desktop VRChat (PC VR) never uses this; leave it off if that's all you
+  play, and the relay stays local-only.
 
 ---
 
@@ -246,6 +296,9 @@ the container either.
 | 404 from the proxy | hostname isn't in the config, or the path isn't in the allowlist |
 | 502 / connection refused from your proxy | app not running, wrong LAN IP, or Windows Firewall blocks port 3080 |
 | Page loads, board stays empty | WebSocket blocked — the proxy isn't passing upgrades through |
+| Quest/phone VRChat never connects | *VRChat on another device* is off, the devices are on different networks, mDNS is blocked, or a firewall blocks the relay's OSC (UDP) / OSCQuery (TCP) ports |
+| Log: "port … is in use by another program — using a random port" | another program has that fixed port; pick a different one (the relay still works locally meanwhile) |
+| Can't open the admin panel from another computer | the web server is on this machine only: set `"web_lan": true` (or an own address) |
 | Works on mobile data, not at home | no NAT hairpinning on your router — use the "on this network" link at home |
 | Everyone suddenly gets the door | the token was rotated (Reset link) |
 | One guest gets "too many wrong links" | they're blocked for 15 minutes; an old link, or a typo |

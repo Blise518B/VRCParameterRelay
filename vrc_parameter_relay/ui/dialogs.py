@@ -149,7 +149,47 @@ class _EnterLineEdit(QLineEdit):
             event.accept()
 
 
-class ShareDialog(QDialog):
+class _FitsContents:
+    """For dialogs with word-wrapped text and fold-outs: always tall enough
+    for what's in them (mix in before QDialog)."""
+
+    def _fit(self, shrink: bool = False) -> None:
+        """Make the window tall enough for everything in it.
+
+        adjustSize() alone comes up short here: it measures the word-wrapped
+        text at one width and may then narrow the window to fit the screen,
+        and the contents change after it runs (the own address fills in
+        _refresh(), tunnel and admin states arrive later, even while the
+        window is closed). Too short a window squeezes the fold-outs into
+        each other. ``shrink`` also drops leftover height (fold closed)."""
+        lay = self.layout()
+        lay.activate()
+        if shrink:
+            self.adjustSize()
+        width = self.width()
+        need = (lay.totalHeightForWidth(width) if lay.hasHeightForWidth()
+                else lay.totalSizeHint().height())
+        need = max(need, lay.totalMinimumSize().height())   # no squeezed fields
+        screen = self.screen()
+        if screen is not None:
+            need = min(need, screen.availableGeometry().height())
+        if need > self.height():
+            self.resize(width, need)
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().showEvent(event)
+        self._fit(shrink=True)  # whatever changed while it was closed
+
+    def event(self, event) -> bool:  # noqa: N802 (Qt override)
+        handled = super().event(event)
+        # a label's text or a row's visibility changed while open: grow (never
+        # shrink, so a window the user made bigger stays that way)
+        if event.type() == QEvent.Type.LayoutRequest and self.isVisible():
+            self._fit()
+        return handled
+
+
+class ShareDialog(_FitsContents, QDialog):
     def __init__(self, main) -> None:  # main: MainWindow
         super().__init__(main)
         self.main = main
@@ -358,40 +398,6 @@ class ShareDialog(QDialog):
                                + "Admin panel — edit the board from a browser")
         self.admin_box.setVisible(self._admin_open)
         self._fit(shrink=True)
-
-    def _fit(self, shrink: bool = False) -> None:
-        """Make the window tall enough for everything in it.
-
-        adjustSize() alone comes up short here: it measures the word-wrapped
-        text at one width and may then narrow the window to fit the screen,
-        and the contents change after it runs (the own address fills in
-        _refresh(), tunnel and admin states arrive later, even while the
-        window is closed). Too short a window squeezes the fold-outs into
-        each other. ``shrink`` also drops leftover height (fold closed)."""
-        lay = self.layout()
-        lay.activate()
-        if shrink:
-            self.adjustSize()
-        width = self.width()
-        need = (lay.totalHeightForWidth(width) if lay.hasHeightForWidth()
-                else lay.totalSizeHint().height())
-        screen = self.screen()
-        if screen is not None:
-            need = min(need, screen.availableGeometry().height())
-        if need > self.height():
-            self.resize(width, need)
-
-    def showEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        super().showEvent(event)
-        self._fit(shrink=True)  # whatever changed while it was closed
-
-    def event(self, event) -> bool:  # noqa: N802 (Qt override)
-        handled = super().event(event)
-        # a label's text or a row's visibility changed while open: grow (never
-        # shrink, so a window the user made bigger stays that way)
-        if event.type() == QEvent.Type.LayoutRequest and self.isVisible():
-            self._fit()
-        return handled
 
     def _refresh_admin_scope_note(self, public: bool) -> None:
         self.admin_public_note.setText(
@@ -654,7 +660,7 @@ class ShareDialog(QDialog):
         self.guests_label.setToolTip(", ".join(names) if names else "")
 
 
-class LinkSettingsDialog(QDialog):
+class LinkSettingsDialog(_FitsContents, QDialog):
     def __init__(self, main) -> None:  # main: MainWindow
         super().__init__(main)
         self.main = main
@@ -672,7 +678,10 @@ class LinkSettingsDialog(QDialog):
             lay.addWidget(radio)
             label = QLabel(hint)
             label.setWordWrap(True)
-            label.setStyleSheet("color:#94a698; font-size:12px; margin-left:26px;")
+            label.setStyleSheet("color:#94a698; font-size:12px;")
+            # a real margin, not CSS: QLabel counts it when it works out how
+            # tall its wrapped text is (CSS margins made the layout too short)
+            label.setContentsMargins(26, 0, 0, 0)
             lay.addWidget(label)
             return radio
 
@@ -742,6 +751,73 @@ class LinkSettingsDialog(QDialog):
         note.setStyleSheet("color:#5f6f63; font-size:11px;")
         lay.addWidget(note)
 
+        # -- VRChat on another device + fixed ports (folded away) --------------
+        self.net_btn = _fold_button()
+        self.net_btn.clicked.connect(self._toggle_net)
+        lay.addWidget(self.net_btn)
+        self.net_box = QWidget()
+        net = QVBoxLayout(self.net_box)
+        net.setContentsMargins(0, 0, 0, 0)
+        net.setSpacing(8)
+        self.remote_check = QCheckBox(
+            "VRChat on another device (Quest standalone / Android phone)")
+        self.remote_check.setChecked(bool(settings.get("osc_remote")))
+        net.addWidget(self.remote_check)
+        remote_hint = QLabel(
+            "Listens on your network instead of only this PC, so VRChat on a "
+            "Quest or phone on the same Wi-Fi finds the relay. Desktop VRChat "
+            "doesn't need it — it only ever talks to programs on its own PC. "
+            "Windows may ask to let the app through its firewall: allow it on "
+            "private networks.")
+        remote_hint.setWordWrap(True)
+        remote_hint.setStyleSheet("color:#94a698; font-size:12px;")
+        remote_hint.setContentsMargins(26, 0, 0, 0)
+        net.addWidget(remote_hint)
+        ports = QFormLayout()
+
+        def _port_spin(value: int, automatic: bool) -> QSpinBox:
+            spin = QSpinBox(minimum=0 if automatic else 1, maximum=65535)
+            if automatic:
+                spin.setSpecialValueText("automatic")
+            spin.setValue(int(value or 0) if automatic else int(value or 3080))
+            return spin
+
+        self.lan_check = QCheckBox("Web server reachable from your network")
+        self.lan_check.setChecked(bool(settings.get("web_lan")))
+        net.addWidget(self.lan_check)
+        lan_hint = QLabel(
+            "Open the admin panel from a phone or another computer at home. "
+            "Off = this PC only. Never through the public link either way.")
+        lan_hint.setWordWrap(True)
+        lan_hint.setStyleSheet("color:#94a698; font-size:12px;")
+        lan_hint.setContentsMargins(26, 0, 0, 0)
+        net.addWidget(lan_hint)
+        self.osc_port_spin = _port_spin(settings.get("osc_in_port"), True)
+        self.oq_port_spin = _port_spin(settings.get("oscquery_port"), True)
+        self.web_port_spin = _port_spin(settings.get("web_port"), False)
+        ports.addRow("OSC port", self.osc_port_spin)
+        ports.addRow("OSCQuery port", self.oq_port_spin)
+        ports.addRow("Web server port", self.web_port_spin)
+        net.addLayout(ports)
+        ports_hint = QLabel(
+            "Fixed ports are for firewalls that open ports rather than programs "
+            "(ufw, firewalld): open the OSC port (UDP) and the OSCQuery port "
+            "(TCP). <i>Automatic</i> picks a free port each start. The web "
+            "server port is what a reverse proxy or port forward points at.")
+        ports_hint.setWordWrap(True)
+        ports_hint.setStyleSheet("color:#94a698; font-size:12px;")
+        net.addWidget(ports_hint)
+        self.net_status = QLabel()
+        self.net_status.setWordWrap(True)
+        self.net_status.setStyleSheet("color:#5f6f63; font-size:11px;")
+        net.addWidget(self.net_status)
+        lay.addWidget(self.net_box)
+        # open by itself when something in it isn't the default
+        self._net_open = bool(settings.get("osc_remote") or settings.get("osc_in_port")
+                              or settings.get("oscquery_port") or settings.get("web_lan")
+                              or int(settings.get("web_port") or 3080) != 3080)
+        self._refresh_net_status()
+
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
@@ -760,7 +836,31 @@ class LinkSettingsDialog(QDialog):
             self.cf_radio.setChecked(True)   # hidden options never stay picked
         self.adv_box.setVisible(advanced)
         self.ngrok_box.setVisible(advanced and self.ngrok_radio.isChecked())
-        self.adjustSize()
+        # "&&": a single & would turn into a keyboard-shortcut underline
+        self.net_btn.setText(("▾  " if self._net_open else "▸  ")
+                             + "Network && ports — Quest / phone, firewall, LAN")
+        self.net_box.setVisible(self._net_open)
+        self._fit(shrink=True)
+
+    def _toggle_net(self) -> None:
+        self._net_open = not self._net_open
+        self._update_visible()
+
+    def _refresh_net_status(self) -> None:
+        """What the connection uses right now (a taken port shows here)."""
+        link = self.main.core.link
+        status = link.status() if callable(getattr(link, "status", None)) else {}
+        if not status.get("osc_port"):
+            self.net_status.setText("")
+            return
+        where = ("your network (every interface)" if status.get("remote")
+                 else "this PC only")
+        text = (f"Now: listening on {where} — OSC port {status.get('osc_port')}, "
+                f"OSCQuery port {status.get('oscquery_port')}.")
+        warnings = status.get("port_warnings") or []
+        if warnings:
+            text += "<br><span style='color:#facc15;'>⚠ " + "<br>⚠ ".join(warnings) + "</span>"
+        self.net_status.setText(text)
 
     def _save(self) -> None:
         store = self.main.core.store
@@ -777,11 +877,60 @@ class LinkSettingsDialog(QDialog):
         elif self.cf_radio.isChecked() or (provider == "ngrok" and not advanced):
             provider = "cloudflare"   # hidden options never stay active
 
+        problem = self._check_ports()
+        if problem:
+            QMessageBox.warning(self, "Check the ports", problem)
+            return
+
         provider_changed = provider != (store.settings.get("tunnel_provider") or "cloudflare")
         store.set("advanced_link", advanced)
         store.set("share_method", method)
         store.set("tunnel_provider", provider)
         store.set("ngrok_authtoken", self.token_edit.text().strip())
         store.set("ngrok_domain", self.domain_edit.text().strip())
-        self.main.apply_link_settings(provider_changed=provider_changed)
+
+        def apply_links(port_moved: bool = False) -> None:
+            # a tunnel only learns the web port when it starts: restart it
+            # if the port moved
+            self.main.apply_link_settings(provider_changed=provider_changed or port_moved)
+
+        # VRChat connection + ports: only what changed is re-applied
+        net = {"osc_remote": self.remote_check.isChecked(),
+               "osc_in_port": self.osc_port_spin.value(),
+               "oscquery_port": self.oq_port_spin.value()}
+        if any(store.settings.get(k) != v for k, v in net.items()):
+            for key, value in net.items():
+                store.set(key, value)
+            self.main.restart_vrchat_link()
+        web_port = self.web_port_spin.value()
+        port_changed = web_port != int(store.settings.get("web_port") or 3080)
+        lan_changed = self.lan_check.isChecked() != bool(store.settings.get("web_lan"))
+        if port_changed or lan_changed:
+            store.set("web_port", web_port)
+            store.set("web_lan", self.lan_check.isChecked())
+            # the listener first, then the link: one Save that switches to
+            # the tunnel AND moves the port starts the tunnel once, on the
+            # new port
+            self.main.change_web_listener(web_port if port_changed else None,
+                                          then=apply_links)
+        else:
+            apply_links()
         self.accept()
+
+    def _check_ports(self) -> str:
+        """What's wrong with the port fields ("" = fine)."""
+        osc, oq, web = (self.osc_port_spin.value(), self.oq_port_spin.value(),
+                        self.web_port_spin.value())
+        stored = self.main.core.store.settings
+        for name, port, key in (("OSC", osc, "osc_in_port"), ("OSCQuery", oq, "oscquery_port"),
+                                ("web server", web, "web_port")):
+            # a low port already in settings.json was set on purpose: keep it
+            if port and port < 1024 and port != int(stored.get(key) or 0):
+                return (f"The {name} port must be 1024 or higher (lower ports "
+                        f"need administrator rights on Linux).")
+        if osc in (9000, 9001):
+            return (f"The OSC port can't be {osc} — that's VRChat's own OSC "
+                    f"port. Leave it on automatic or pick another one.")
+        if oq and oq == web:
+            return "The OSCQuery port and the web server port can't be the same."
+        return ""

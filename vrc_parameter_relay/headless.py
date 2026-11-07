@@ -5,7 +5,8 @@ Same program, same data, same settings — just no Qt. Start the exe (or
 VRChat, loads the saved boards, starts sharing with the configured link
 (the fixed link, a Cloudflare / ngrok tunnel, or your own address) and
 keeps running until killed. Board edits made by a parallel UI instance are picked up live via
-the profile hot-reload poll.
+the profile hot-reload poll. Settings changed in the admin panel (share
+method, own address, ports, VRChat on another device) apply right away.
 
 This module must never import Qt — that's the point.
 """
@@ -29,6 +30,12 @@ log = logging.getLogger(__name__)
 
 RELOAD_POLL_S = 2.0
 
+# settings whose change means: switch what carries the link
+LINK_KEYS = {"public_url", "share_method", "tunnel_provider", "ngrok_authtoken",
+             "ngrok_domain"}
+# ...and: restart the VRChat connection
+VRCHAT_KEYS = {"osc_remote", "osc_in_port", "oscquery_port"}
+
 
 class HeadlessApp:
     def __init__(self, store: Optional[Store] = None) -> None:
@@ -39,9 +46,11 @@ class HeadlessApp:
         self.tunnel = Tunnel(self.store)
         self.fixed = FixedLink(self.store, self.web)
         self.stop_event = threading.Event()
+        self._apply_lock = threading.Lock()   # admin-panel changes, one at a time
         self.guard = None  # set by run(); tests construct without one
         self.tunnel.on_change = self._tunnel_changed
         self.fixed.on_change = self._fixed_changed
+        self.web.share_link = self.share_url   # admin panel Settings
         self.core.add_listener(self._log_event)
 
     # -- logging hooks (the log file is the headless "UI") ---------------------
@@ -64,7 +73,12 @@ class HeadlessApp:
 
     def _log_event(self, event: dict) -> None:
         kind = event.get("t")
-        if kind == "guests":
+        if kind == "settings_changed":
+            # off the caller's thread: it is the web server's event loop, and
+            # restarting a tunnel or the VRChat connection takes a moment
+            threading.Thread(target=self.apply_settings, args=(event.get("keys") or (),),
+                             name="apply-settings", daemon=True).start()
+        elif kind == "guests":
             log.info("guests: %d %s", event["count"],
                      ", ".join(event.get("names") or []))
         elif kind == "avatar":
@@ -84,6 +98,53 @@ class HeadlessApp:
             raise RuntimeError("guest web server failed to start")
 
         self.core.set_sharing(True)
+        self._start_link()
+        self._log_access()
+
+    def share_url(self) -> str:
+        """The link guests use right now ("" while it isn't up yet)."""
+        settings = self.store.settings
+        token = self.core.guest_token()
+        if settings.get("public_url"):
+            return compose_public_url(settings["public_url"], token)
+        if settings.get("share_method") == "tunnel":
+            if self.tunnel.state == "online" and self.tunnel.url:
+                return f"{self.tunnel.url}/?k={token}"
+            return ""
+        return self.fixed.url() or ""
+
+    def _start_link(self) -> None:
+        """Bring up whatever carries the link now, stopping the others."""
+        settings = self.store.settings
+        if settings.get("public_url"):
+            self.tunnel.stop()
+            self.fixed.stop()
+        elif settings.get("share_method") == "tunnel":
+            self.fixed.stop()
+            if self.tunnel.state in ("off", "error"):
+                self.tunnel.start(self.web.port)
+        else:
+            self.tunnel.stop()
+            self.fixed.start()
+
+    def apply_settings(self, keys) -> None:
+        """Settings changed in the admin panel: apply them live. The web
+        server has already moved its listener (address/port) by now."""
+        keys = set(keys)
+        with self._apply_lock:
+            log.info("settings changed in the admin panel: %s", ", ".join(sorted(keys)))
+            if keys & {"tunnel_provider", "ngrok_authtoken", "ngrok_domain", "web_port"}:
+                # a different provider is a different link; and cloudflared /
+                # ngrok only learn the web port when they start
+                self.tunnel.stop()
+            if keys & (LINK_KEYS | {"web_port"}):
+                self._start_link()
+            if keys & VRCHAT_KEYS:
+                self.link.restart()
+            self._log_access()
+
+    def _log_access(self) -> None:
+        """The headless "UI": every way in, in the log."""
         url = compose_public_url(self.store.settings.get("public_url") or "",
                                  self.core.guest_token())
         if url:
@@ -96,14 +157,11 @@ class HeadlessApp:
             if address.startswith("http://"):
                 log.warning("own address is plain http:// — the password "
                             "crosses the internet unencrypted")
-        elif self.store.settings.get("share_method") == "tunnel":
-            self.tunnel.start(self.web.port)
-        else:
-            self.fixed.start()
         log.info("local test link: http://127.0.0.1:%d/?k=%s",
                  self.web.port, self.core.guest_token())
         ip = lan_ip()
-        if ip:  # how a server/Linux user reaches the board from another device
+        on_lan = self.web.bind_host == "*"   # own address or web_lan
+        if ip and on_lan:  # how a server/Linux user reaches it from another device
             log.info("on this network:  http://%s:%d/?k=%s",
                      ip, self.web.port, self.core.guest_token())
         if self.store.settings.get("admin_enabled", True):
@@ -113,9 +171,24 @@ class HeadlessApp:
             log.info("ADMIN PANEL:    http://127.0.0.1:%d/admin?k=%s   "
                      "(full control — do not share; %s)",
                      self.web.port, self.core.admin_token(), scope)
+            if ip and on_lan:
+                log.info("  from another computer on your network: "
+                         "http://%s:%d/admin?k=%s", ip, self.web.port,
+                         self.core.admin_token())
+            elif ip:
+                log.info("  (this machine only — to open it from another computer "
+                         "on your network, set \"web_lan\": true in settings.json)")
         if self.core.yolo_enabled:
             log.warning("YOLO mode is ON (persisted setting) — guests control "
                         "every parameter")
+        st = self.link.status() if callable(getattr(self.link, "status", None)) else {}
+        if st.get("osc_port"):
+            log.info("VRChat connection: %s — OSC port %s, OSCQuery port %s",
+                     "other devices on the network allowed (Quest / Android)"
+                     if st.get("remote") else "this PC only",
+                     st.get("osc_port"), st.get("oscquery_port"))
+        for warning in st.get("port_warnings") or ():
+            log.warning("%s", warning)
 
     def run_forever(self) -> None:
         try:

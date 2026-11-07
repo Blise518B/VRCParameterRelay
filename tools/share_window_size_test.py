@@ -22,6 +22,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 DATA = Path(tempfile.mkdtemp(prefix="vrcpr-sharesize-"))
 os.environ["VRC_PARAMETER_RELAY_DATA_DIR"] = str(DATA)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# real font metrics: offscreen Qt has no fonts of its own, and without
+# them wrapped text measures inconsistently — size checks would lie
+if os.path.isdir("C:/Windows/Fonts"):
+    os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 

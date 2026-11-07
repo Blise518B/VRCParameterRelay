@@ -101,7 +101,7 @@ def main() -> None:
     check("initial sync adopts tree avatar", syncs and syncs[-1][0] == "avtr_A")
 
     baseline = len(syncs)
-    link._handle_avatar_change("/avatar/change", "avtr_B")  # tree still shows A
+    link._handle_avatar_change(("127.0.0.1", 9000), "/avatar/change", "avtr_B")  # tree still shows A
     check("OSC avatar change fires immediately", avatars == ["avtr_B"])
     time.sleep(2.2)  # refetch at 1.5s hits the stale tree
     check("stale tree did NOT flip sync back to old avatar", len(syncs) == baseline)

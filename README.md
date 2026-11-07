@@ -51,9 +51,13 @@ unsigned exe — *More info → Run anyway*.
 
 - Settings and boards live in `%APPDATA%\VRCParameterRelay`
   (`~/.config/VRCParameterRelay` on Linux)
-- `--headless` runs it without a window; its settings go in `settings.json`
+- `--headless` runs it without a window; change its settings in the admin
+  panel's ⚙ Settings or in `settings.json`
   ([which ones](docs/REMOTE-ACCESS.md#headless-the-same-settings-without-the-share-window))
-- The app has to run on the same PC as VRChat
+- The app has to run on the same PC as desktop VRChat. VRChat on a Quest
+  (standalone) or an Android phone can connect from anywhere on your network:
+  Link settings → *Network & ports*
+  ([details](docs/REMOTE-ACCESS.md#vrchat-on-a-quest-or-phone-another-device))
 - The fixed link works while the app is running and sharing; when it's
   closed, the page waits and connects by itself once you're back
 - Cloudflare quick-tunnel links (Link settings) change when you restart the

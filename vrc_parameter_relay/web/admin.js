@@ -84,6 +84,7 @@ function connect() {
       // snapshots are built when sent and every change produces one, so the
       // newest simply wins — never gate this, a lost reply would freeze us
       S = msg; applyStyle(msg.style); render();
+      refreshSettingsLive(); settingsReply(msg);
     } else if (msg.t === "param_batch") {  // 50ms server-side batches
       Object.entries(msg.params).forEach(([name, [value]]) => {
         values[name] = value; queuePaint(name);
@@ -91,6 +92,7 @@ function connect() {
     } else if (msg.t === "param") {
       values[msg.name] = msg.value; queuePaint(msg.name);
     } else if (msg.t === "error") {
+      if (settingsPending) settingsFailed = true;
       toast(msg.msg);
     } else if (msg.t === "denied") {
       $("overlayText").textContent =
@@ -430,6 +432,7 @@ function editControl(c) {
   const ptype = (S.params[c.param] || {}).ptype || "Float";
   const allowed = KIND_FOR[ptype] || ["slider"];
   $("modalTitle").textContent = "Edit control";
+  normalModal();
   $("modalBody").innerHTML = `
     <div class="modal-row"><label>Parameter</label>
       <span style="flex:1;color:var(--muted);font-size:12.5px">${esc(c.param)} (${esc(ptype)})</span></div>
@@ -476,6 +479,7 @@ function editControl(c) {
 
 function promptModal(title, label, value, run) {
   $("modalTitle").textContent = title;
+  normalModal();
   $("modalBody").innerHTML =
     `<div class="modal-row"><label>${esc(label)}</label>
        <input type="text" id="mText" value="${esc(value)}"></div>`;
@@ -484,6 +488,170 @@ function promptModal(title, label, value, run) {
   $("mText").focus(); $("mText").select();
   $("modalOk").onclick = () => { run($("mText").value); modal.classList.add("hidden"); };
   $("modalCancel").onclick = () => modal.classList.add("hidden");
+}
+
+function normalModal() {
+  settingsOpen = false;
+  $("modalOk").textContent = "OK";
+  document.querySelector(".modal-card").classList.remove("wide");
+}
+
+// -- settings dialog (sharing, VRChat connection, web server) -------------
+// What the desktop's Share window and Link settings do — and the only
+// settings screen a headless relay has.
+let settingsOpen = false, settingsPending = false, settingsFailed = false;
+let leavingPort = 0;   // set when this panel's own port may change with Save
+const METHOD_HINTS = {
+  fixed: "The same link every time — across restarts, until you reset it. Nothing to install, no account.",
+  cloudflare: "A new link every session. Downloads cloudflared once.",
+  ngrok: "Your ngrok static domain — the same URL forever. Needs your ngrok authtoken.",
+  own: "Your own domain, routed here by a reverse proxy, a Cloudflare Tunnel or a port forward. Guests get a password door.",
+};
+function methodOf(st) {
+  if (st.public_url) return "own";
+  if (st.share_method !== "tunnel") return "fixed";
+  return st.tunnel_provider === "ngrok" ? "ngrok" : "cloudflare";
+}
+function netStatus(st) {
+  if (!st.osc_port_now) return "";
+  const where = st.remote_now ? "your network (every interface)" : "this PC only";
+  let out = `Now: listening on ${where} — OSC port ${st.osc_port_now}, OSCQuery port ${st.oscquery_port_now}.`;
+  (st.port_warnings || []).forEach((w) => { out += `<br><span class="warn">⚠ ${esc(w)}</span>`; });
+  return out;
+}
+function refreshSettingsLive() {   // what the server changes: password, link, ports
+  if (!settingsOpen || !S || !S.settings) return;
+  const st = S.settings;
+  $("sPw").textContent = st.share_password || "";
+  $("sLink").value = st.share_link || "";
+  $("sNet").innerHTML = netStatus(st);
+}
+function openSettings() {
+  if (!S || !S.settings) return;
+  const st = S.settings;
+  $("modalTitle").textContent = "Settings";
+  $("modalOk").textContent = "Save";
+  document.querySelector(".modal-card").classList.add("wide");
+  const method = methodOf(st);
+  const opt = (v, t) => `<option value="${v}"${method === v ? " selected" : ""}>${t}</option>`;
+  $("modalBody").innerHTML = `
+    <div class="set-section">Sharing</div>
+    <div class="modal-row"><label>Current link</label>
+      <input type="text" id="sLink" readonly value="${esc(st.share_link)}">
+      <button class="btn small" id="sCopy">Copy</button></div>
+    <div class="modal-row"><label>Share via</label>
+      <select id="sMethod">${opt("fixed", "Fixed link (recommended)")}${opt("cloudflare", "Cloudflare quick tunnel")}${opt("ngrok", "ngrok static domain")}${opt("own", "Your own address")}</select></div>
+    <div class="set-hint" id="sMethodHint"></div>
+    <div class="modal-row" id="sAddrRow"><label>Your address</label>
+      <input type="text" id="sAddr" placeholder="https://relay.example.com" value="${esc(st.public_url)}"></div>
+    <div class="modal-row" id="sTokRow"><label>ngrok authtoken</label>
+      <input type="password" id="sTok" autocomplete="off" placeholder="${st.ngrok_token_set ? "saved — leave empty to keep it" : "paste your authtoken"}"></div>
+    <div class="modal-row" id="sDomRow"><label>Static domain</label>
+      <input type="text" id="sDom" placeholder="yourname.ngrok-free.app" value="${esc(st.ngrok_domain)}"></div>
+    <div class="modal-row"><label>Password</label>
+      <span class="pw" id="sPw">${esc(st.share_password)}</span>
+      <button class="btn small" id="sNewPw" title="Future sign-ins need the new one; people already signed in stay in">New password</button></div>
+    <label class="set-check"><input type="checkbox" id="sNames"${st.require_guest_names ? " checked" : ""}>
+      Guests must enter a name before they can use the board</label>
+    <div class="modal-row"><label></label>
+      <button class="btn small danger" id="sReset" title="A new link: ends every session everywhere, one-click links included">Reset link</button></div>
+
+    <div class="set-section">VRChat connection</div>
+    <label class="set-check"><input type="checkbox" id="sRemote"${st.osc_remote ? " checked" : ""}>
+      VRChat on another device (Quest standalone / Android phone)</label>
+    <div class="set-hint">Listens on your network instead of only this PC, so VRChat on a Quest or phone on the same Wi-Fi finds the relay. Desktop VRChat doesn't need it — it only ever talks to programs on its own PC. On Windows, allow the app through the firewall on private networks; on Linux with ufw/firewalld, set fixed ports below and open them.</div>
+    <div class="modal-row"><label>OSC port</label>
+      <input type="number" id="sOsc" min="0" max="65535" placeholder="automatic" value="${st.osc_in_port || ""}"></div>
+    <div class="modal-row"><label>OSCQuery port</label>
+      <input type="number" id="sOq" min="0" max="65535" placeholder="automatic" value="${st.oscquery_port || ""}"></div>
+    <div class="set-hint">Fixed ports are for firewalls that open ports rather than programs (ufw, firewalld): open the OSC port (UDP) and the OSCQuery port (TCP). Empty = a free port each start.</div>
+    <div class="set-hint" id="sNet"></div>
+
+    <div class="set-section">Web server</div>
+    <div class="modal-row"><label>Port</label>
+      <input type="number" id="sWeb" min="1024" max="65535" value="${st.web_port}"></div>
+    <div class="set-hint">What a reverse proxy or port forward points at. Changing it moves this admin panel too — it reconnects on the new port.</div>
+    <label class="set-check"><input type="checkbox" id="sLan"${st.web_lan ? " checked" : ""}>
+      Reachable from your network (open this panel from another computer or a phone)</label>
+    <div class="set-hint">Off: this machine only (unless you share on your own address, which opens it anyway). Either way the admin panel never answers through the public link.</div>`;
+  const sync = () => {
+    const m = $("sMethod").value;
+    $("sMethodHint").textContent = METHOD_HINTS[m];
+    $("sAddrRow").style.display = m === "own" ? "" : "none";
+    $("sTokRow").style.display = $("sDomRow").style.display = m === "ngrok" ? "" : "none";
+  };
+  $("sMethod").onchange = sync; sync();
+  settingsOpen = true;
+  refreshSettingsLive();
+  $("sCopy").onclick = () => {
+    const field = $("sLink");
+    if (!field.value) return;
+    const done = () => toast("Link copied.");
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(field.value).then(done);
+    else { field.select(); document.execCommand("copy"); done(); }
+  };
+  $("sNewPw").onclick = () => {
+    if (confirm("Make a new password? Guests who haven't signed in yet need the new one; everyone already signed in stays in."))
+      send("new_password", {});
+  };
+  $("sReset").onclick = () => {
+    if (confirm("Reset the link? Everyone is logged out and every old link — one-click links included — stops working."))
+      send("reset_guest_link", {});
+  };
+  const modal = $("modal");
+  modal.classList.remove("hidden");
+  $("modalOk").onclick = () => {
+    const m = $("sMethod").value;
+    const port = (id) => { const v = $(id).value.trim(); return v === "" ? 0 : Number(v); };
+    const want = {
+      share_method: m === "fixed" ? "fixed" : (m === "own" ? st.share_method : "tunnel"),
+      public_url: m === "own" ? $("sAddr").value.trim() : "",
+      require_guest_names: $("sNames").checked,
+      osc_remote: $("sRemote").checked,
+      osc_in_port: port("sOsc"),
+      oscquery_port: port("sOq"),
+      web_port: port("sWeb"),
+      web_lan: $("sLan").checked,
+    };
+    if (m === "own" && !want.public_url) { toast("Enter your address — or pick another way to share."); return; }
+    if (m === "cloudflare" || m === "ngrok") want.tunnel_provider = m;
+    if (m === "ngrok") {
+      want.ngrok_domain = $("sDom").value.trim();
+      if ($("sTok").value.trim()) want.ngrok_authtoken = $("sTok").value.trim();
+      else if (!st.ngrok_token_set) { toast("ngrok needs your authtoken."); return; }
+    }
+    const settings = {};   // only what changed — the server checks everything again
+    Object.entries(want).forEach(([k, v]) => { if (st[k] !== v) settings[k] = v; });
+    if (!Object.keys(settings).length) { modal.classList.add("hidden"); settingsOpen = false; return; }
+    // opened from another device, and this Save puts the web server back on
+    // this machine only? then this page loses its way back — say so first
+    const fromElsewhere = !["localhost", "127.0.0.1", "[::1]", "::1"].includes(location.hostname);
+    if (fromElsewhere && st.web_bind === "*" && !want.web_lan && !want.public_url &&
+        !confirm("After this, the web server only answers on the relay's own machine — " +
+                 "this page (open from another device) will lose its connection, and you'd " +
+                 "need that machine or settings.json to change it back. Save anyway?")) return;
+    settingsPending = true; settingsFailed = false;
+    // opened on the relay's own port (not through a proxy)? then follow it
+    leavingPort = String(location.port) === String(st.web_port_now) ? st.web_port_now : 0;
+    send("set_settings", { settings });
+  };
+  $("modalCancel").onclick = () => { modal.classList.add("hidden"); settingsOpen = false; };
+}
+function settingsReply(msg) {   // the server's answer to "set_settings"
+  if (!settingsPending || msg.for !== "set_settings") return;
+  settingsPending = false;
+  const from = leavingPort; leavingPort = 0;
+  if (settingsFailed) return;   // the error toast explained it — dialog stays open
+  $("modal").classList.add("hidden");
+  settingsOpen = false;
+  toast("Settings saved.");
+  // the reply names the port the server really listens on now (a taken
+  // port falls back to a free one) — follow that, not what was asked for
+  const now = msg.settings && msg.settings.web_port_now;
+  if (from && now && String(now) !== String(from)) {
+    toast(`Web server moved to port ${now} — reconnecting there…`);
+    setTimeout(() => { location.port = String(now); }, 1500);
+  }
 }
 
 // -- clicks ---------------------------------------------------------------
@@ -584,6 +752,8 @@ document.addEventListener("click", (e) => {
     const dock = $("dock");
     dock.classList.toggle("hidden");
     t.textContent = dock.classList.contains("hidden") ? "<" : ">";
+  } else if (t.id === "settingsBtn") {
+    openSettings();
   } else if (t.id === "helpBtn") {
     alert("Admin panel — the same board editor as the desktop window.\n\n"
       + "• Drag the ⠿ on a card to move it inside or between categories\n"

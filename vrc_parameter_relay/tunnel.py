@@ -72,6 +72,11 @@ class Tunnel:
         self._proc: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
         self._err_hint: Optional[str] = None
+        # bumped by every start and stop: a start whose number is no longer
+        # current was cancelled (stop / restart while it was still resolving
+        # or downloading the binary) and must not spawn anything
+        self._gen = 0
+        self._worker = threading.local()   # the generation a worker runs for
 
     # -- public API ------------------------------------------------------------
 
@@ -90,11 +95,14 @@ class Tunnel:
             binary = self._binary()
             have_it = (binary.system_path() is not None
                        or binary.own_path(self.bin_dir).exists())
+            self._gen += 1
+            gen = self._gen
             self._set("starting" if have_it else "downloading")
-        threading.Thread(target=self._start_impl, args=(local_port,), daemon=True).start()
+        threading.Thread(target=self._start_impl, args=(local_port, gen), daemon=True).start()
 
     def stop(self) -> None:
         with self._lock:
+            self._gen += 1   # a start still in progress is cancelled
             proc, self._proc = self._proc, None
         if proc:
             try:
@@ -122,7 +130,21 @@ class Tunnel:
     def _binary(self, provider: Optional[str] = None) -> Binary:
         return NGROK if (provider or self.provider()) == "ngrok" else CLOUDFLARED
 
-    def _start_impl(self, local_port: int) -> None:
+    def _current(self, gen: int) -> bool:
+        return gen == self._gen
+
+    def _set_if(self, gen: int, state: str, **kw) -> bool:
+        """A worker's state change — dropped if stop()/restart() came first,
+        or a cancelled start would put "downloading" back over "off" (and
+        start() would then refuse to run)."""
+        with self._lock:
+            if gen != self._gen:
+                return False
+            self._set(state, **kw)
+        return True
+
+    def _start_impl(self, local_port: int, gen: int = 0) -> None:
+        self._worker.gen = gen
         provider = self.provider()
         try:
             if provider == "ngrok":
@@ -133,19 +155,22 @@ class Tunnel:
                         "ngrok needs an authtoken and a static domain — open Link settings.")
             binary = self._binary(provider)
             if not binary.verified(self.bin_dir) and binary.system_path() is None:
-                self._set("downloading")
+                self._set_if(gen, "downloading")
             exe = binary.resolve(
                 self.bin_dir,
-                on_progress=lambda pct: self._set("downloading", progress=pct))
-            self._set("starting")
+                on_progress=lambda pct: self._set_if(gen, "downloading", progress=pct))
+            if not self._set_if(gen, "starting"):
+                return   # stopped or restarted meanwhile
             self._err_hint = None
             if provider == "ngrok":
                 self._spawn_ngrok(exe, local_port, token, domain)
             else:
                 self._spawn_cloudflared(exe, local_port)
+        except _Cancelled:
+            pass
         except Exception as exc:
-            log.exception("tunnel failed")
-            self._set("error", error=str(exc))
+            if self._set_if(gen, "error", error=str(exc)):
+                log.exception("tunnel failed")
 
     # -- cloudflared -----------------------------------------------------------------
 
@@ -196,8 +221,18 @@ class Tunnel:
 
     def _popen(self, cmd: list[str], env: Optional[dict] = None) -> subprocess.Popen:
         proc = popen(cmd, env=env)
+        gen = getattr(self._worker, "gen", None)
         with self._lock:
-            self._proc = proc
+            stale = gen is not None and gen != self._gen
+            if not stale:
+                self._proc = proc
+        if stale:   # stopped while we were spawning: never leave it running
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+            raise _Cancelled()
         return proc
 
     def _on_proc_exit(self, proc: subprocess.Popen) -> None:
@@ -213,6 +248,10 @@ class Tunnel:
             self._set("error", error=f"tunnel exited before coming up{hint}")
         elif self.state == "online":
             self._set("error", error=f"tunnel disconnected{hint}")
+
+
+class _Cancelled(Exception):
+    """A start that stop()/restart() superseded."""
 
 
 def _normalize_domain(domain: str) -> str:

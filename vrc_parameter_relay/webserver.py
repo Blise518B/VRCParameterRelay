@@ -16,11 +16,12 @@ import ipaddress
 import json
 import logging
 import math
+import re
 import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Optional, Set
+from typing import Any, Callable, Optional, Set
 
 from aiohttp import WSMsgType, web
 
@@ -128,6 +129,8 @@ def normalize_public_url(raw: str) -> str:
     if parts.scheme not in ("http", "https") or not parts.hostname:
         return ""
     netloc = parts.netloc.rsplit("@", 1)[-1].lower()   # never keep credentials
+    if not re.fullmatch(r"[\w.\-]+(:\d+)?|\[[0-9a-f:.]+\](:\d+)?", netloc):
+        return ""   # spaces or other junk in the host name
     default = ":443" if parts.scheme == "https" else ":80"
     if netloc.endswith(default):
         netloc = netloc[:-len(default)]
@@ -140,6 +143,113 @@ def compose_public_url(address: str, token: str) -> str:
     return f"{base}/?k={token}" if base else ""
 
 
+# What the admin panel's Settings dialog may change, and how each value is
+# checked. Everything else (tokens, admin_public, trusted_proxy …) stays in
+# settings.json on purpose.
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise ValueError("must be true or false")
+
+
+def _as_port(automatic: bool, reserved: tuple = ()):
+    """1024–65535 (lower ports need root on Linux); 0 = automatic where
+    allowed; VRChat's own ports refused."""
+    def check(value: Any) -> int:
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise ValueError("must be a port number")
+        try:
+            number = float(value)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("must be a port number") from None
+        if not math.isfinite(number) or number != int(number):
+            raise ValueError("must be a whole port number")
+        port = int(number)
+        if automatic and port == 0:
+            return 0
+        if not 1024 <= port <= 65535:
+            raise ValueError("must be between 1024 and 65535"
+                             + (" (or empty for automatic)" if automatic else ""))
+        if port in reserved:
+            raise ValueError(f"can't be {port} — that's VRChat's own OSC port")
+        return port
+    return check
+
+
+def _choice(*options: str):
+    def check(value: Any) -> str:
+        if value not in options:
+            raise ValueError("must be one of " + ", ".join(options))
+        return value
+    return check
+
+
+def _text(limit: int):
+    def check(value: Any) -> str:
+        if not isinstance(value, str) or len(value) > limit:
+            raise ValueError(f"must be text up to {limit} characters")
+        return value.strip()
+    return check
+
+
+def _address(value: Any) -> str:
+    raw = _text(300)(value)
+    address = normalize_public_url(raw)
+    if raw and not address:
+        raise ValueError("isn't a web address — it should look like https://relay.example.com")
+    return address
+
+
+ADMIN_SETTINGS = {
+    "share_method": _choice("fixed", "tunnel"),
+    "tunnel_provider": _choice("cloudflare", "ngrok"),
+    "ngrok_authtoken": _text(200),
+    "ngrok_domain": _text(253),
+    "public_url": _address,
+    "require_guest_names": _as_bool,
+    "web_port": _as_port(False),
+    "web_lan": _as_bool,
+    "osc_remote": _as_bool,
+    "osc_in_port": _as_port(True, (9000, 9001)),
+    "oscquery_port": _as_port(True),
+}
+# what the Settings dialog calls them (error messages)
+SETTING_LABELS = {
+    "share_method": "Share via", "tunnel_provider": "Tunnel",
+    "ngrok_authtoken": "ngrok authtoken", "ngrok_domain": "Static domain",
+    "public_url": "Your address", "require_guest_names": "Guest names",
+    "web_port": "Web port", "web_lan": "Reachable from your network",
+    "osc_remote": "VRChat on another device", "osc_in_port": "OSC port",
+    "oscquery_port": "OSCQuery port",
+}
+# changing these moves the web listener (address or port)
+REBIND_KEYS = {"public_url", "web_port", "web_lan"}
+
+
+def check_admin_settings(raw: Any, current: dict) -> tuple[dict, Optional[str]]:
+    """Validate a Settings-dialog submission against the current settings.
+    Returns (the values that actually change, error message or None) — on
+    any error nothing changes."""
+    if not isinstance(raw, dict):
+        return {}, "settings must be an object"
+    clean: dict = {}
+    for key, value in raw.items():
+        check = ADMIN_SETTINGS.get(key)
+        if check is None:
+            return {}, f"{key!r} can't be changed from the admin panel"
+        try:
+            clean[key] = check(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            return {}, f"{SETTING_LABELS.get(key, key)} {exc}"
+    merged = {**current, **clean}
+    if merged.get("oscquery_port") and merged.get("oscquery_port") == merged.get("web_port"):
+        return {}, "the OSCQuery port and the web port can't be the same"
+    if (merged.get("share_method") == "tunnel" and merged.get("tunnel_provider") == "ngrok"
+            and not (merged.get("ngrok_authtoken") and merged.get("ngrok_domain"))):
+        return {}, "ngrok needs both the authtoken and the static domain."
+    return {k: v for k, v in clean.items() if current.get(k) != v}, None
+
+
 class GuestServer:
     def __init__(self, core, port: int) -> None:
         self.core = core
@@ -148,6 +258,12 @@ class GuestServer:
         self.bind_host = "127.0.0.1"
         self._runner = None
         self._site = None
+        self.binds = 0   # counts finished (re)binds
+        # rebind() hands out a number; bound_seq is the newest one finished,
+        # so a caller waits for ITS rebind, not an earlier one still pending
+        self._rebind_seq = 0
+        self.bound_seq = 0
+        self._rebind_lock: Optional[asyncio.Lock] = None   # made on the loop
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._sockets: Set[web.WebSocketResponse] = set()
         self._admins: Set[web.WebSocketResponse] = set()
@@ -163,6 +279,9 @@ class GuestServer:
         self._param_flush_handle = None
         self._thread: Optional[threading.Thread] = None
         self.on_guests = lambda n: None
+        # the link guests use right now — the host (window or headless) knows
+        # which method carries it; shown in the admin panel's Settings
+        self.share_link: Callable[[], str] = lambda: ""
         core.add_listener(self._core_event)
 
     # -- lifecycle --------------------------------------------------------
@@ -214,38 +333,53 @@ class GuestServer:
         self._site = site
         self.bind_host = host or "*"
         self.port = port
+        self.binds += 1
         log.info("guest web server on http://%s:%d", self.bind_host, self.port)
 
     def _bind_host(self) -> Optional[str]:
-        """Loopback-only, unless the user shares on their own address.
+        """Loopback-only, unless the user shares on their own address or
+        opened it to the LAN ("web_lan").
 
         Then whatever routes that address here — a router port forward, a
-        reverse proxy on another box, a Cloudflare Tunnel — has to reach the
-        listener, so it opens on every interface (IPv4 + IPv6).
+        reverse proxy on another box, a Cloudflare Tunnel, a browser on
+        another computer — has to reach the listener, so it opens on every
+        interface (IPv4 + IPv6).
         """
-        if self.core.store.settings.get("public_url"):
+        settings = self.core.store.settings
+        if settings.get("public_url") or settings.get("web_lan"):
             return None
         return "127.0.0.1"
 
-    def rebind(self, port: Optional[int] = None) -> None:
+    def rebind(self, port: Optional[int] = None) -> int:
         """Re-create the listener with the current settings (thread-safe).
 
         Existing guest connections stay open; only the listening socket moves.
+        Returns a number: ``bound_seq`` reaches it once this rebind is done.
         """
         if not self.loop:
-            return
+            return 0
         if port:
             self.requested_port = port
+        self._rebind_seq += 1
+        seq = self._rebind_seq
         self.loop.call_soon_threadsafe(
-            lambda: asyncio.ensure_future(self._rebind()))
+            lambda: asyncio.ensure_future(self._rebind(seq)))
+        return seq
 
-    async def _rebind(self) -> None:
+    async def _rebind(self, seq: int = 0) -> None:
         if self._runner is None:
             return
-        if self._site is not None:
-            await self._site.stop()
-            self._site = None
-        await self._start_site()
+        # one at a time: two overlapping rebinds (an admin Save and a desktop
+        # Save) would each open a listener and orphan one of them — still
+        # answering on the LAN after LAN access was switched off
+        if self._rebind_lock is None:
+            self._rebind_lock = asyncio.Lock()
+        async with self._rebind_lock:
+            if self._site is not None:
+                await self._site.stop()
+                self._site = None
+            await self._start_site()
+            self.bound_seq = max(self.bound_seq, seq)
 
     # -- auth (guests) -----------------------------------------------------
 
@@ -506,6 +640,39 @@ class GuestServer:
                             for w, n in self._names.items()],
             "colors": list(CATEGORY_COLORS),
             "style": self._style(),
+            "settings": self._admin_settings(),
+        }
+
+    def _admin_settings(self) -> dict:
+        """The Settings dialog's view. The ngrok authtoken is write-only."""
+        st = self.core.store.settings
+        link = getattr(self.core, "link", None)
+        status = link.status() if callable(getattr(link, "status", None)) else {}
+        try:
+            share_link = self.share_link() or ""
+        except Exception:  # noqa: BLE001 — a host hook must never break the panel
+            share_link = ""
+        return {
+            "share_method": st.get("share_method") or "fixed",
+            "tunnel_provider": st.get("tunnel_provider") or "cloudflare",
+            "ngrok_domain": st.get("ngrok_domain") or "",
+            "ngrok_token_set": bool(st.get("ngrok_authtoken")),
+            "public_url": st.get("public_url") or "",
+            "share_password": self.core.share_password(),
+            "require_guest_names": bool(st.get("require_guest_names")),
+            "web_port": int(st.get("web_port") or 3080),
+            "web_lan": bool(st.get("web_lan")),
+            "osc_remote": bool(st.get("osc_remote")),
+            "osc_in_port": int(st.get("osc_in_port") or 0),
+            "oscquery_port": int(st.get("oscquery_port") or 0),
+            # what is in effect right now
+            "share_link": share_link,
+            "web_port_now": self.port,
+            "web_bind": self.bind_host,
+            "osc_port_now": status.get("osc_port"),
+            "oscquery_port_now": status.get("oscquery_port"),
+            "remote_now": bool(status.get("remote")),
+            "port_warnings": list(status.get("port_warnings") or []),
         }
 
     async def _admin_ws(self, ws: web.WebSocketResponse) -> web.WebSocketResponse:
@@ -520,7 +687,10 @@ class GuestServer:
                 except ValueError:
                     continue
                 try:
-                    result = self._admin_op(data)
+                    if data.get("op") == "set_settings":
+                        result = await self._set_settings(data.get("settings"))
+                    else:
+                        result = self._admin_op(data)
                 except Exception as exc:  # noqa: BLE001 — report, never die
                     log.exception("admin op failed: %s", data.get("op"))
                     result = f"{type(exc).__name__}: {exc}"
@@ -541,6 +711,44 @@ class GuestServer:
         finally:
             self._admins.discard(ws)
         return ws
+
+    async def _set_settings(self, raw: Any) -> Optional[str]:
+        """The Settings dialog's Save. Moves this listener itself if needed —
+        so the reply already names the port it really got — and only then
+        tells the host (window or headless), which applies the rest: the
+        link (a tunnel restarts on the new port), the VRChat connection."""
+        core = self.core
+        changes, error = check_admin_settings(raw, dict(core.store.settings))
+        if error:
+            return error
+        if not changes:
+            return None
+        if "require_guest_names" in changes:   # tells connected guests too
+            core.set_require_names(changes["require_guest_names"])
+        for key, value in changes.items():
+            if key != "require_guest_names":
+                core.store.set(key, value)
+        if changes.get("tunnel_provider") == "ngrok":
+            core.store.set("advanced_link", True)   # Link settings shows it
+        log.info("admin panel changed: %s", ", ".join(sorted(changes)))
+        keys = set(changes)
+        problem = None
+        if REBIND_KEYS & keys:
+            before = self.port
+            if "web_port" in changes:
+                self.requested_port = changes["web_port"]
+            try:
+                await self._rebind()
+            except OSError as exc:   # not even a random port: say so, apply the rest
+                log.error("web server couldn't listen again: %s", exc)
+                problem = ("Saved, but the web server couldn't listen again "
+                           f"({exc.strerror or exc}) — restart the relay.")
+            if self.port != before:
+                # moved (a new port, or back from an earlier fallback): a
+                # tunnel must follow — it only learns the port when it starts
+                keys.add("web_port")
+        core.emit({"t": "settings_changed", "keys": sorted(keys)})
+        return problem
 
     def _admin_op(self, data: dict) -> Optional[str]:
         """Run one panel command against the core. Returns an error or None."""
@@ -605,6 +813,9 @@ class GuestServer:
                 refetch()
         elif op == "reset_guest_link":
             core.regenerate_token()
+        elif op == "new_password":
+            core.regenerate_share_password()
+            core.emit({"t": "settings_changed", "keys": ["share_password"]})
         else:
             return f"unknown operation {op!r}"
         return None

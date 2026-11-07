@@ -20,6 +20,21 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "web_port": 3080,
     "osc_send_host": "127.0.0.1",   # fallback — real target comes from VRChat's OSCQuery HOST_INFO
     "osc_send_port": 9000,
+    # VRChat on another device on the same network (Quest standalone, an
+    # Android phone): listen for OSC + OSCQuery on every interface instead
+    # of loopback only, and talk to the address VRChat advertises. Off =
+    # same PC only. Desktop VRChat never talks to another machine, so this
+    # is for the Android build only.
+    "osc_remote": False,
+    # Fixed ports for the relay's own OSC input and OSCQuery server; 0 = a
+    # random free port every start. Fixed ports let a firewall that opens
+    # ports rather than programs (ufw, firewalld) let VRChat through.
+    "osc_in_port": 0,
+    "oscquery_port": 0,
+    # Open the web server (guest board + admin panel) to the LAN even without
+    # an own address — a headless box you manage from another computer, or
+    # the admin panel on a phone. An own address opens it anyway.
+    "web_lan": False,
     "guest_token": None,             # generated on first run
     # separate secret for the admin panel — a guest link must NEVER grant it
     "admin_token": None,             # generated on first run

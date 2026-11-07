@@ -5,6 +5,7 @@ import html
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any, Optional
@@ -29,7 +30,14 @@ from .theme import (
 )
 from .whats_new import WhatsNewDialog
 from .whats_new import should_show as whats_new_due
+from .whats_new import unseen as unseen_news
 from .widgets import CategoryBox, ControlCard, ParamTree, drag_ghost
+
+# settings whose change means: switch what carries the link
+LINK_KEYS = {"public_url", "share_method", "tunnel_provider", "ngrok_authtoken",
+             "ngrok_domain"}
+# ...and: restart the VRChat connection
+VRCHAT_KEYS = {"osc_remote", "osc_in_port", "oscquery_port"}
 
 RELEASES_URL = f"{GITHUB_URL}/VRCParameterRelay/releases"
 
@@ -128,6 +136,7 @@ class MainWindow(QMainWindow):
         self._build_board_area()
         self._build_params_dock()
         self.share_dialog = ShareDialog(self)
+        self.web.share_link = self.current_share_url   # admin panel Settings
         self.statusBar().showMessage("Starting…")
         self._update_info: Optional[dict] = None  # newest release, once known
         self.update_label = QLabel()
@@ -259,8 +268,9 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(500, self._show_whats_new)
 
     def _show_whats_new(self) -> None:
+        pages = unseen_news(self.core.store.settings)  # before marking them seen
         self.core.store.set("last_seen_version", __version__)
-        WhatsNewDialog(self).exec()
+        WhatsNewDialog(self, pages).exec()
 
     def closeEvent(self, event) -> None:
         size = self.normalGeometry().size()  # pre-maximize size, not the screen's
@@ -545,6 +555,8 @@ class MainWindow(QMainWindow):
             self._rebuild_board()
         elif t == "vrc_status":
             self._update_vrc_chip(event)
+        elif t == "settings_changed":   # from the admin panel
+            self.apply_changed_settings(event.get("keys") or ())
         elif t in ("tunnel", "fixed_link"):
             self.share_dialog.update_tunnel(event)
             self._refresh_pause_btn()
@@ -580,7 +592,8 @@ class MainWindow(QMainWindow):
         self.vrc_chip.style().unpolish(self.vrc_chip)
         self.vrc_chip.style().polish(self.vrc_chip)
         self.statusBar().showMessage(
-            f"OSC in: 127.0.0.1:{st.get('osc_port', '?')} (via OSCQuery)   |   "
+            f"OSC in: {st.get('bind_host') or '127.0.0.1'}:{st.get('osc_port', '?')} "
+            f"(via OSCQuery)   |   "
             f"OSC out: {st.get('send_target', '?')}   |   "
             f"advertised: {'yes' if st.get('advertised') else 'no'}   |   "
             f"web: 127.0.0.1:{self.web.port or '…'}")
@@ -963,6 +976,46 @@ class MainWindow(QMainWindow):
             self._start_link()
         self.share_dialog.refresh_state()
         self._refresh_pause_btn()
+
+    def restart_vrchat_link(self) -> None:
+        """Apply changed VRChat connection settings (other devices, ports)
+        without freezing the window: a restart waits for mDNS to settle."""
+        restart = getattr(self.core.link, "restart", None)
+        if callable(restart):
+            threading.Thread(target=restart, name="vrc-restart", daemon=True).start()
+
+    def apply_changed_settings(self, keys) -> None:
+        """Settings changed in the admin panel: apply them here the same way
+        the Share window and Link settings would. The web server has already
+        moved its listener (address/port) by the time this arrives."""
+        keys = set(keys)
+        if keys & (LINK_KEYS | {"web_port"}):
+            # cloudflared / ngrok only learn the web port when they start
+            self.apply_link_settings(provider_changed=bool(
+                keys & {"tunnel_provider", "ngrok_authtoken", "ngrok_domain", "web_port"}))
+        if keys & VRCHAT_KEYS:
+            self.restart_vrchat_link()
+        self.share_dialog.refresh_state()
+
+    def change_web_listener(self, port: Optional[int] = None, then=None) -> None:
+        """Move the web server (new port, or LAN on/off). Once it is listening
+        again, ``then(port_moved)`` runs — by default: restart a running
+        tunnel if the port moved (it only learns the port when it starts)."""
+        old_port = self.web.port
+        seq = self.web.rebind(port)
+        deadline = time.time() + 5
+
+        def default(moved: bool) -> None:
+            if moved and self.share_method() == "tunnel" and self.tunnel.state != "off":
+                self.tunnel.restart(self.web.port)
+
+        def follow() -> None:
+            # wait for THIS rebind (an earlier one may still be finishing)
+            if (seq and getattr(self.web, "bound_seq", 0) >= seq) or time.time() > deadline:
+                (then or default)(self.web.port != old_port)
+                return
+            QTimer.singleShot(50, follow)
+        QTimer.singleShot(50, follow)
 
     def start_sharing(self) -> bool:
         """Same as Share -> "Start sharing": unpause AND bring the link up

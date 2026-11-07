@@ -19,16 +19,16 @@ _TYPE_TO_PTYPE = {"f": "Float", "d": "Float", "i": "Int", "h": "Int",
 class TreeProvider(Protocol):
     """What the HTTP server needs from its owner."""
 
-    def host_info(self) -> dict: ...
+    def host_info(self, local_ip: Optional[str] = None) -> dict: ...
     def tree_node(self, path: str) -> Optional[dict]: ...
 
 
 # -- what we serve to VRChat ---------------------------------------------------
 
-def build_host_info(name: str, osc_port: int) -> dict:
+def build_host_info(name: str, osc_port: int, osc_ip: str = "127.0.0.1") -> dict:
     return {
         "NAME": name,
-        "OSC_IP": "127.0.0.1",
+        "OSC_IP": osc_ip,
         "OSC_PORT": osc_port,
         "OSC_TRANSPORT": "UDP",
         "EXTENSIONS": {"ACCESS": True, "CLIPMODE": False, "RANGE": True,
@@ -75,7 +75,14 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path, _, query = self.path.partition("?")
         if "HOST_INFO" in query:
-            self._json(self.provider.host_info())
+            # the address this client reached us on is the one it can send
+            # OSC to — loopback for VRChat on this PC, the LAN address for a
+            # Quest on the network
+            try:
+                local_ip = self.connection.getsockname()[0]
+            except OSError:
+                local_ip = None
+            self._json(self.provider.host_info(local_ip))
             return
         node = self.provider.tree_node(path)
         if node is None:
@@ -95,9 +102,11 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
-def make_http_server(provider: TreeProvider) -> ThreadingHTTPServer:
+def make_http_server(provider: TreeProvider, host: str = "127.0.0.1",
+                     port: int = 0) -> ThreadingHTTPServer:
+    """Raises OSError if the port is taken (the caller decides what then)."""
     handler = type("Handler", (_Handler,), {"provider": provider})
-    return ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    return ThreadingHTTPServer((host, port), handler)
 
 
 # -- what we read from VRChat -----------------------------------------------------
