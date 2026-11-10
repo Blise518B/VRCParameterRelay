@@ -168,13 +168,17 @@ def before_any_vrchat(lan: str) -> None:
     finally:
         link.stop()
 
-    # same PC (default): a new VRChat launch takes over at once, as before
+    # same PC (default): a new VRChat launch takes over once the old one no
+    # longer answers (more in tools/dead_record_test.py)
     store = Store()
     link = VrcLink(store)
     link._http_json = lambda url: None
     link._vrchat_seen("VRChat-Client-OLD111", ["127.0.0.1"], 9)
-    link._vrchat_seen("VRChat-Client-NEW222", ["127.0.0.1"], 9)
+    link._http_json = lambda url: ({"OSC_PORT": 9} if url == "http://127.0.0.1:10/?HOST_INFO"
+                                   else None)   # only the new launch answers
+    link._vrchat_seen("VRChat-Client-NEW222", ["127.0.0.1"], 10)
     check("same PC: the newest VRChat launch takes over", link._vrchat_name == "VRChat-Client-NEW222")
+    link._http_json = lambda url: None
     link._vrchat_gone("VRChat-Client-NEW222")
     check("same PC: after its goodbye, no jump to an older (crashed) launch",
           link._vrchat_name is None and link.vrchat_http is None)

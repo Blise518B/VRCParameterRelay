@@ -431,7 +431,32 @@ class VrcLink:
             log.info("another VRChat client on the network (%s) — staying with %s",
                      name, self._vrchat_name)
             return
+        current = self.vrchat_http
+        if not self.remote and current and self._vrchat_name not in (None, name):
+            # same PC: a crashed VRChat's record can linger for hours next to
+            # the live game, even be announced after it. Switch only to one
+            # that answers, and only once ours doesn't (VRChat restarted).
+            if not self._client_answers(name):
+                log.info("ignoring %s: its OSCQuery service doesn't answer "
+                         "(left over from an earlier VRChat?)", name)
+                return
+            if self._answers(current):
+                log.info("another VRChat (%s) — staying with %s, which answers",
+                         name, self._vrchat_name)
+                return
         self._connect_vrchat(name)
+
+    def _answers(self, url: str) -> bool:
+        return self._http_json(url + "/?HOST_INFO") is not None
+
+    def _client_answers(self, name: str) -> bool:
+        """Does a VRChat client we've seen answer? A record a crashed VRChat
+        left behind never does."""
+        entry = self._vrchat_clients.get(name)
+        if entry is None:
+            return False
+        addresses, port = entry
+        return self._answers(f"http://{self._vrchat_address(addresses)}:{port}")
 
     def _connect_vrchat(self, name: str) -> bool:
         entry = self._vrchat_clients.get(name)
@@ -452,13 +477,15 @@ class VrcLink:
     def _connect_other_client(self) -> bool:
         """The client we talked to is gone: another one we've seen, if any.
 
-        Remote mode only (a Quest and a phone, say). On the same PC a new
-        VRChat launch announces itself anyway — and a leftover record there
-        is a crashed launch, not a second device worth switching to."""
-        if not self.remote:
-            return False
+        Other devices (a Quest and a phone, say): the next one in line. On
+        the same PC only one that answers — a leftover record there is
+        usually a crashed launch, which never does."""
         for name in list(self._vrchat_clients):
-            if name != self._vrchat_name and self._connect_vrchat(name):
+            if name == self._vrchat_name:
+                continue
+            if not self.remote and not self._client_answers(name):
+                continue
+            if self._connect_vrchat(name):
                 return True
         return False
 
@@ -512,7 +539,8 @@ class VrcLink:
                 if self._http_json(self._last_vrchat_http + "/?HOST_INFO"):
                     log.info("VRChat's OSCQuery service is responding again")
                     self._vrchat_service_found(self._last_vrchat_http)
-                else:
+                elif self.remote or not self._connect_other_client():
+                    # (same PC: another VRChat we've seen takes over if it answers)
                     self._emit_status()
             else:
                 self._emit_status()  # keep the UI's 'receiving' staleness fresh
