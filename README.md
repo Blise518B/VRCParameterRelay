@@ -22,6 +22,10 @@ forwarding, no accounts, no setup.
   into categories, saved per avatar, switches automatically with your avatar
 - Lock a category so guests can look but not touch
 - Invert a toggle (⇄) when a parameter's logic is backwards
+- Controls keep working when an avatar update makes VRCFury renumber their
+  parameter (`VF12_Hoodie` → `VF37_Hoodie`). A control whose parameter is
+  gone turns grey — drop a parameter onto it (or ⋯ → *Change parameter…*)
+  to point it at another one
 - Number (Int) parameters work as toggles and hold buttons too — each one
   sets its own value (Outfit = 1, 2, 3 …) and they switch each other off,
   just like VRChat's own menu

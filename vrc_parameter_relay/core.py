@@ -27,8 +27,9 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 import threading
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from .store import (
     CATEGORY_COLORS, Store, new_control_id, normalize_profile, short_avatar_name,
@@ -54,6 +55,71 @@ def _clamp_int(value: Any, default: int) -> int:
         return max(INT_MIN, min(INT_MAX, int(round(float(value)))))
     except (TypeError, ValueError):
         return default
+
+
+# VRCFury puts a "VF<number>_" tag in front of the parameters it builds
+# (VF12_Hoodie). The number is handed out per build, so an avatar update can
+# turn VF12_Hoodie into VF37_Hoodie and every saved control on it would go
+# dead. The parameter list keeps showing the real names; controls follow the
+# new number in the background (follow_vrcfury_rename).
+_VRCFURY_TAG = re.compile(r"^(?:VF\d+_)+")
+
+
+def vrcfury_tag(name: str) -> str:
+    """VRCFury's VF<number>_ tag(s) at the start of a name ("" = none)."""
+    match = _VRCFURY_TAG.match(name)
+    return match.group(0) if match and match.end() < len(name) else ""
+
+
+def strip_vrcfury(name: str) -> str:
+    """The parameter name without VRCFury's VF<number>_ tag(s)."""
+    return name[len(vrcfury_tag(name)):]
+
+
+def _tag_groups(names: Iterable[str]) -> dict[str, set[str]]:
+    """tag -> the names (without it) that carry it. One tag is one VRCFury
+    component, so its group is what recognises it under a new number."""
+    groups: dict[str, set[str]] = {}
+    for name in names:
+        tag = vrcfury_tag(name)
+        if tag:
+            groups.setdefault(tag, set()).add(name[len(tag):])
+    return groups
+
+
+def follow_vrcfury_rename(old: str, live: Iterable[str],
+                          previous: Iterable[str] = ()) -> Optional[str]:
+    """The parameter a VRCFury-tagged name became after a rebuild, or None
+    (= leave the control where it is).
+
+    Only tagged names move, and only to tagged names: VF12_Hoodie never
+    lands on a plain Hoodie. One candidate is taken as is. Several
+    (VF220_BrushToggle and VF39_BrushToggle) are told apart by their
+    component: the new number whose names match what the old number carried
+    in `previous` (the list before the rebuild) wins - only if it clearly
+    does. Copies that can't be told apart are never guessed."""
+    tag = vrcfury_tag(old)
+    if not tag:
+        return None
+    base = old[len(tag):]
+    live = list(live)
+    candidates = [n for n in live if vrcfury_tag(n) and strip_vrcfury(n) == base]
+    if len(candidates) == 1:
+        return candidates[0]
+    was = _tag_groups(previous).get(tag)
+    if not candidates or not was:
+        return None
+    now = _tag_groups(live)
+
+    def overlap(name: str) -> float:
+        group = now.get(vrcfury_tag(name), set())
+        return len(was & group) / len(was | group)
+
+    ranked = sorted(((overlap(n), n) for n in candidates), reverse=True)
+    best, runner_up = ranked[0][0], ranked[1][0]
+    if best >= 0.5 and best - runner_up >= 0.25:
+        return ranked[0][1]
+    return None
 
 
 def int_switch_values(control: dict) -> tuple[int, int]:
@@ -99,6 +165,9 @@ class AppCore:
             else normalize_profile({"name": "No avatar yet"}, None)
         )
         self.board: dict[str, Any] = self._active_preset()
+        # VRChat's full parameter list arrived for the live avatar: until
+        # then no card can be called missing (the list is still filling)
+        self._live_synced = False
         self._profile_disk_mtime = (store.profile_mtime(self.avatar_id)
                                     if self.avatar_id else 0.0)
         self._seed_params_from_profile()
@@ -197,6 +266,7 @@ class AppCore:
             self.profile = self.store.load_profile(avatar_id)
             self.board = self._active_preset()
             self._profile_disk_mtime = self.store.profile_mtime(avatar_id)
+            self._live_synced = False
             if self.is_live:
                 self.params = {}  # the live stream + OSCQuery sync refill it
                 self.store.set("last_avatar_id", avatar_id)
@@ -256,6 +326,16 @@ class AppCore:
             return  # viewing another avatar offline; don't mix in live params
         with self._lock:
             before = {(n, p["ptype"]) for n, p in self.params.items()}
+            # the list before this build: what VRCFury's numbers meant then
+            previous = set(self.params) | set(self.profile.get("params") or {})
+            reported = {name for name, _, _ in params}
+            if reported:
+                # VRChat's list is the whole avatar. A re-uploaded avatar keeps
+                # its ID, so without this its old names (VF12_Hoodie next to
+                # the new VF37_Hoodie) would linger. An empty tree is VRChat
+                # mid-load — every avatar has the built-in parameters.
+                for gone in set(self.params) - reported:
+                    del self.params[gone]
             for name, ptype, value in params:
                 cur = self.params.get(name)
                 self.params[name] = {
@@ -268,14 +348,78 @@ class AppCore:
             if changed:
                 # keep the parameter list for offline editing
                 self.profile["params"] = {n: p["ptype"] for n, p in self.params.items()}
+            moved = self._follow_vrcfury_renames(previous) if reported else []
             retyped = self._sync_control_types()
-            if changed or retyped:
+            # the first full list for this avatar: cards may turn "missing"
+            first_list = bool(reported) and not self._live_synced
+            if reported:
+                self._live_synced = True
+            if changed or retyped or moved:
                 self._save()
         if changed:
             log.info("OSCQuery sync: %d parameters", len(params))
             self.emit({"t": "params_reset", "params": snapshot})
-        if changed or retyped:
+        if changed or retyped or moved or first_list:
             self._emit_board()  # push fresh values to guests too
+        if moved:
+            self.emit({"t": "vrcfury_followed",
+                       "params": len({old for old, _ in moved}), "controls": len(moved)})
+
+    def _follow_vrcfury_renames(self, previous: set[str]) -> list[tuple[str, str]]:
+        """Controls whose VRCFury-tagged parameter is gone move to the name
+        it got in this build (VF12_Hoodie -> VF37_Hoodie). `previous` is the
+        parameter list before it. Returns (old, new) per control that moved.
+        Caller holds the lock."""
+        live = list(self.params)
+        moved: list[tuple[str, str]] = []
+        for preset in self.profile["presets"]:
+            for control in preset["controls"]:
+                old = control["param"]
+                if old in self.params:
+                    continue
+                new = follow_vrcfury_rename(old, live, previous)
+                if not new:
+                    if vrcfury_tag(old):
+                        log.info("control %s: parameter gone, no clear new VRCFury "
+                                 "number for it - left as is", old)
+                    continue
+                control["param"] = new
+                if control.get("label") == old:  # the default label: the name
+                    control["label"] = new
+                log.info("control %s: parameter renamed by VRCFury, now %s", old, new)
+                moved.append((old, new))
+        return moved
+
+    def missing_params(self) -> set[str]:
+        """Parameters that cards on this board point at but the avatar doesn't
+        have (gone in an avatar update, renamed by hand, copies the VRCFury
+        follow couldn't tell apart). Empty while the list isn't known yet."""
+        with self._lock:
+            known = self._live_synced if self.is_live else bool(self.profile.get("params"))
+            if not known:
+                return set()
+            return {c["param"] for c in self.board["controls"]} - set(self.params)
+
+    def repoint_control(self, control_id: str, param: str) -> bool:
+        """Point a card at another parameter of the avatar. It keeps its label
+        (unless that was just the old name), category, range and Int values;
+        its control type follows the new parameter's type."""
+        with self._lock:
+            control = next((c for c in self.board["controls"] if c["id"] == control_id), None)
+            info = self.params.get(param)
+            if not control or not info or control["param"] == param:
+                return False
+            old = control["param"]
+            control["param"] = param
+            if control.get("label") == old:  # the default label: the name
+                control["label"] = param
+            ptype = info.get("ptype")
+            if ptype in KINDS_FOR_PTYPE and ptype != control.get("ptype"):
+                retype_control(control, ptype)
+            self._save()
+        log.info("control %s: pointed at %s (was %s)", control_id, param, old)
+        self._emit_board()
+        return True
 
     def _sync_control_types(self) -> bool:
         """Controls (in every preset) follow the parameter types VRChat

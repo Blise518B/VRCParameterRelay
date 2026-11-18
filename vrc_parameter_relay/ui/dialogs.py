@@ -1,16 +1,19 @@
 """Dialogs: share/link settings and the add/edit-control form."""
 from __future__ import annotations
 
+import html
 from typing import Optional
 
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-    QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QProgressBar, QPushButton, QRadioButton, QSpinBox, QVBoxLayout, QWidget,
+    QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMessageBox, QProgressBar, QPushButton, QRadioButton, QSpinBox,
+    QVBoxLayout, QWidget,
 )
 
+from ..core import strip_vrcfury
 from ..webserver import compose_public_url, lan_ip, normalize_public_url
 
 KIND_CHOICES = {
@@ -127,6 +130,73 @@ class ControlDialog(QDialog):
         if self.invert_check is not None:
             out["invert"] = self.invert_check.isChecked()
         return out
+
+
+class ParamPickerDialog(QDialog):
+    """⋯ → Change parameter…: point a card at another parameter of the
+    avatar. For a card whose parameter is gone, the filter starts on its
+    name without the VRCFury tag, so the renumbered candidates are on top."""
+
+    def __init__(self, parent: QWidget, params: dict[str, dict], current: str,
+                 missing: bool) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Change parameter")
+        self.setMinimumSize(380, 440)
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+        now = QLabel(
+            f"<b>{html.escape(current)}</b> isn't on this avatar anymore." if missing
+            else f"Now: <b>{html.escape(current)}</b>")
+        now.setWordWrap(True)
+        lay.addWidget(now)
+        keep = QLabel("The card keeps its label, category and values.")
+        keep.setStyleSheet("color:#8ba58f; font-size:12px;")
+        lay.addWidget(keep)
+        self.filter = QLineEdit(placeholderText="Filter parameters…")
+        self.filter.setClearButtonEnabled(True)
+        lay.addWidget(self.filter)
+        self.list = QListWidget()
+        for name in sorted(params, key=lambda n: (n.lower(), n)):
+            if name == current:
+                continue
+            item = QListWidgetItem(f"{name}    ({params[name].get('ptype') or '?'})")
+            item.setData(Qt.UserRole, name)
+            item.setToolTip(name)
+            self.list.addItem(item)
+        self.list.itemDoubleClicked.connect(lambda _item: self.accept())
+        lay.addWidget(self.list, 1)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        lay.addWidget(self.buttons)
+        self.filter.textChanged.connect(self._apply_filter)
+        self.list.currentItemChanged.connect(self._update_ok)
+        self.filter.setText(strip_vrcfury(current) if missing else "")
+        self._apply_filter()
+        self.filter.setFocus()
+
+    def _apply_filter(self) -> None:
+        needle = self.filter.text().lower().strip()
+        first = None
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            hidden = bool(needle) and needle not in item.data(Qt.UserRole).lower()
+            item.setHidden(hidden)
+            if not hidden and first is None:
+                first = item
+        current = self.list.currentItem()
+        if current is None or current.isHidden():
+            self.list.setCurrentItem(first)
+        self._update_ok()
+
+    def _update_ok(self, *_args) -> None:
+        item = self.list.currentItem()
+        self.buttons.button(QDialogButtonBox.Ok).setEnabled(
+            item is not None and not item.isHidden())
+
+    def chosen(self) -> Optional[str]:
+        item = self.list.currentItem()
+        return item.data(Qt.UserRole) if item is not None and not item.isHidden() else None
 
 
 def _fold_button() -> QPushButton:

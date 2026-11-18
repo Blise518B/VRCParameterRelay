@@ -173,12 +173,17 @@ class ControlCard(QFrame):
 
     set_value = Signal(str, object)          # control_id, value
     edit_requested = Signal(str)             # control_id
+    repoint_requested = Signal(str)          # control_id
     remove_requested = Signal(str)
 
-    def __init__(self, control: dict[str, Any], value: Any = None) -> None:
+    def __init__(self, control: dict[str, Any], value: Any = None,
+                 missing: bool = False) -> None:
         super().__init__()
         self.control = control
+        # the avatar doesn't have this card's parameter (anymore)
+        self.missing = missing
         self.setObjectName("Card")
+        self.setProperty("missing", missing)
         self.setFixedWidth(210)
         self._updating = False
         self._invert = bool(control.get("invert"))
@@ -235,6 +240,23 @@ class ControlCard(QFrame):
 
         if value is not None:
             self.update_value(value)
+        if missing:
+            tip = (f'{control["param"]} isn\'t on this avatar anymore.\n'
+                   "Drop a parameter from the list onto this card, or use\n"
+                   "⋯ → Change parameter…, to point it at another one.")
+            self.setToolTip(tip)
+            self.label.setToolTip(tip)
+            for kind in (QPushButton, QSlider, QSpinBox):
+                for widget in self.findChildren(kind):
+                    widget.setEnabled(False)   # sending it would do nothing
+
+    def set_drop_target(self, on: bool) -> None:
+        """Outline the card while a parameter dragged over it would land here."""
+        if bool(self.property("droptarget")) == on:
+            return
+        self.setProperty("droptarget", on)
+        self.style().unpolish(self)
+        self.style().polish(self)
 
     # -- builders -----------------------------------------------------------
 
@@ -346,6 +368,8 @@ class ControlCard(QFrame):
     def _show_menu(self) -> None:
         menu = QMenu(self)
         menu.addAction("Edit…", lambda: self.edit_requested.emit(self.control["id"]))
+        menu.addAction("Change parameter…",
+                       lambda: self.repoint_requested.emit(self.control["id"]))
         menu.addSeparator()
         menu.addAction("Remove", lambda: self.remove_requested.emit(self.control["id"]))
         menu.exec(self.mapToGlobal(QPoint(self.width() - 10, 30)))
@@ -393,6 +417,7 @@ class CategoryBox(QFrame):
     delete_requested = Signal(str)           # cat_id
     control_dropped = Signal(str, str, int)  # control_id, cat_id, index
     param_dropped = Signal(str, str, str, int)   # param, ptype, cat_id, index
+    param_onto_card = Signal(str, str)       # control_id, param (re-point a grey card)
     category_dropped = Signal(str, str)      # dragged_cat_id, target_cat_id
     category_drag_over = Signal(str, str)    # dragged_cat_id, hovered_cat_id
     category_drag_done = Signal()            # drag ended (any outcome)
@@ -410,6 +435,7 @@ class CategoryBox(QFrame):
         self._ghost: Optional[QLabel] = None
         self._ghost_at = -1
         self._ghost_pos: QPoint | None = None
+        self._target_card: Optional[ControlCard] = None  # grey card under a param drag
         self._copy_targets: list[tuple[str, str]] = []  # (preset_id, name)
 
         root = QVBoxLayout(self)
@@ -546,6 +572,7 @@ class CategoryBox(QFrame):
 
     def dragLeaveEvent(self, event) -> None:
         self._remove_ghost()
+        self._set_target_card(None)
 
     def _drag_update(self, event) -> None:
         md = event.mimeData()
@@ -554,7 +581,36 @@ class CategoryBox(QFrame):
             self.category_drag_over.emit(dragged, self.category["id"])
             return
         pos = self.cards_host.mapFrom(self, event.position().toPoint())
+        if md.hasFormat(MIME_PARAM):
+            # over a grey card, a parameter re-points that card instead of
+            # making a new one next to it
+            card = self._card_at(pos)
+            if card is not None and card.missing:
+                self._remove_ghost()
+                self._set_target_card(card)
+                return
+            self._set_target_card(None)
         self._show_ghost(pos)
+
+    def _card_at(self, pos: QPoint) -> Optional[ControlCard]:
+        for i in range(self.flow.count()):
+            widget = self.flow.itemAt(i).widget()
+            if (isinstance(widget, ControlCard) and widget.isVisible()
+                    and widget.geometry().contains(pos)):
+                return widget
+        return None
+
+    def _set_target_card(self, card: Optional[ControlCard]) -> None:
+        if card is self._target_card:
+            return
+        if self._target_card is not None:
+            try:
+                self._target_card.set_drop_target(False)
+            except RuntimeError:
+                pass  # the board was rebuilt meanwhile
+        self._target_card = card
+        if card is not None:
+            card.set_drop_target(True)
 
     def dropEvent(self, event) -> None:
         md = event.mimeData()
@@ -564,6 +620,13 @@ class CategoryBox(QFrame):
             event.acceptProposedAction()
             if dragged != self.category["id"]:
                 self.category_dropped.emit(dragged, self.category["id"])
+            return
+        target, self._target_card = self._target_card, None
+        if md.hasFormat(MIME_PARAM) and target is not None:
+            param = bytes(md.data(MIME_PARAM)).decode().split("\n", 1)[0]
+            event.acceptProposedAction()
+            target.set_drop_target(False)
+            self.param_onto_card.emit(target.control["id"], param)
             return
         pos = self.cards_host.mapFrom(self, event.position().toPoint())
         index = self._insert_index(pos)

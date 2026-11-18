@@ -133,6 +133,18 @@ body[data-theme="broker"] .cat-grip { color: var(--cat-title, var(--accent)); }
 .card-top .label { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; }
 .card-inv { color: #f0a35e; font-size: 13px; font-weight: 700; }
 .card-val { color: var(--muted); font-size: 11.5px; font-weight: 650; }  /* Int toggle value */
+/* the avatar doesn't have this card's parameter: grey outline, not red */
+.category .card.missing { border-color: #5f6f63; }
+.category .card.missing .label { color: var(--muted); }
+.card.missing .switch, .card.missing .push, .card.missing .stepper,
+.card.missing .slide-row { opacity: 0.35; pointer-events: none; }
+/* a parameter dragged over a grey card would land on it */
+.category .card.droptarget { border-color: var(--accent); }
+.pick-now { font-size: 13px; margin-bottom: 4px; }
+.pick-hint { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+.pick-filter { display: block; width: 100%; box-sizing: border-box; margin: 0 0 8px; }
+.pick-list { width: 100%; background: var(--input-bg); color: var(--text);
+  border: 1px solid var(--card-edge); border-radius: 7px; font: inherit; font-size: 12.5px; }
 .cat-hint {
   color: #5d7a63; font-size: 12px; padding: 16px; text-align: center;
   border: 1px dashed var(--card-edge); border-radius: 9px;

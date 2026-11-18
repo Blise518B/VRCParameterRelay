@@ -565,7 +565,34 @@ QRadioButton::indicator { width: 14px; height: 14px; }
 """ + _broker_cat_variants()
 
 
-THEMES = {"broker": BROKER_QSS, "neon": NEON_QSS}
+def _card_states(dim: str, muted: str, accent: str, *, text: str, edge: str,
+                 well: str, selected: str) -> str:
+    """A card whose parameter the avatar doesn't have: solid grey outline,
+    quieter label (not red - nothing is broken, it just isn't connected).
+    Same specificity as the per-colour card rules, so appended after them."""
+    return f"""
+QFrame#Category QFrame#Card[missing="true"] {{ border: 1px solid {dim}; }}
+QFrame#Category QFrame#Card[missing="true"] QLabel#CardLabel {{ color: {muted}; }}
+QFrame#Category QFrame#Card[missing="true"] QPushButton {{
+    background: transparent; color: {dim}; border: 1px solid {dim};
+}}
+QFrame#Category QFrame#Card[droptarget="true"] {{ border: 1px solid {accent}; }}
+QListWidget {{
+    background: {well}; color: {text}; border: 1px solid {edge}; border-radius: 7px;
+}}
+QListWidget::item {{ padding: 3px 6px; }}
+QListWidget::item:selected {{ background: {selected}; color: {text}; }}
+"""
+
+
+THEMES = {
+    "broker": BROKER_QSS + _card_states(
+        "#5f6f64", "#7f8f81", ACCENTS["broker"],
+        text="#c9d4cc", edge="#243029", well="#090d0a", selected="#14311f"),
+    "neon": NEON_QSS + _card_states(
+        "#5f6f63", "#94a698", ACCENTS["neon"],
+        text="#e6efe8", edge=_NEON_EDGE, well="#0f120f", selected="#1b5a30"),
+}
 
 
 def build_qss(theme: str = DEFAULT_THEME, font: str = "") -> str:

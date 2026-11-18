@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__, resource_path, updater
 from ..fixed_link import FixedLink
 from ..webserver import compose_public_url, normalize_public_url
-from .dialogs import ControlDialog, ShareDialog
+from .dialogs import ControlDialog, ParamPickerDialog, ShareDialog
 from .theme import (
     DEFAULT_FONT, DEFAULT_THEME, FONT_GROUPS, THEME_LABELS, THEME_ORDER,
     accent_of, build_qss,
@@ -551,6 +551,11 @@ class MainWindow(QMainWindow):
                     card.update_value(event["value"])
         elif t == "params_reset":
             self._refresh_params(event["params"])
+        elif t == "vrcfury_followed":
+            p, c = event.get("params", 0), event.get("controls", 0)
+            self.statusBar().showMessage(
+                f"VRCFury renumbered {p} parameter{'s' if p != 1 else ''} — "
+                f"{c} control{'s' if c != 1 else ''} followed", 20000)
         elif t in ("avatar", "board"):
             self._rebuild_board()
         elif t == "vrc_status":
@@ -623,6 +628,7 @@ class MainWindow(QMainWindow):
         other_presets = [(p["id"], p["name"]) for p in self.core.list_presets()
                          if p["id"] != board.get("id")]
         values = self.core.board_values()
+        missing = self.core.missing_params()   # drawn grey
         for i, category in enumerate(board["categories"]):
             box = CategoryBox(category)
             box.renamed.connect(self.core.rename_category)
@@ -630,6 +636,7 @@ class MainWindow(QMainWindow):
             box.delete_requested.connect(self._delete_category)
             box.control_dropped.connect(self.core.move_control_to_category)
             box.param_dropped.connect(self._param_dropped)
+            box.param_onto_card.connect(self.core.repoint_control)
             box.category_dropped.connect(self.core.move_category)
             box.category_drag_over.connect(self._show_cat_ghost)
             box.category_drag_done.connect(self._clear_cat_ghost)
@@ -640,10 +647,12 @@ class MainWindow(QMainWindow):
             for control in board["controls"]:
                 if control.get("cat") != category["id"]:
                     continue
-                card = ControlCard(control, values.get(control["param"]))
+                card = ControlCard(control, values.get(control["param"]),
+                                   missing=control["param"] in missing)
                 card.set_value.connect(self.core.set_control_value)
                 card.remove_requested.connect(self.core.remove_control)
                 card.edit_requested.connect(self._edit_control)
+                card.repoint_requested.connect(self._repoint_control)
                 box.add_card(card)
                 self.cards[control["id"]] = card
             box.finalize()
@@ -803,6 +812,16 @@ class MainWindow(QMainWindow):
                             suggested_on=self.core.next_on_value(control["param"], control_id))
         if dlg.exec() == QDialog.Accepted:
             self.core.update_control(control_id, **dlg.result_dict())
+
+    def _repoint_control(self, control_id: str) -> None:
+        """⋯ → Change parameter…"""
+        control = next((c for c in self.core.board["controls"] if c["id"] == control_id), None)
+        if not control:
+            return
+        dlg = ParamPickerDialog(self, self.core.param_snapshot(), control["param"],
+                                missing=control["param"] in self.core.missing_params())
+        if dlg.exec() == QDialog.Accepted and dlg.chosen():
+            self.core.repoint_control(control_id, dlg.chosen())
 
     # -- parameter dock ---------------------------------------------------------------
 

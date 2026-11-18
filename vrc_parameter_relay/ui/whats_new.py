@@ -36,6 +36,27 @@ class Release(NamedTuple):
 
 RELEASES = (
     Release(
+        (1, 6),
+        ("🔁", "Your board survives avatar updates",
+         "VRCFury gives its parameters a number (VF12_Hoodie) that can change "
+         "every time you upload. Your controls now follow their parameter to "
+         "the new number by themselves, so the board keeps working after an "
+         "update. When copies can't be told apart, a control stays put "
+         "instead of guessing."),
+        (
+            ("◻", "Missing parameters show up grey",
+             "A control whose parameter isn't on your avatar anymore turns "
+             "grey, instead of quietly doing nothing."),
+            ("🎯", "Point a control at another parameter",
+             "Drag a parameter from the list onto a grey control, or use "
+             "⋯ → Change parameter… on any control. Its label, category and "
+             "values stay."),
+            ("🧹", "A tidier parameter list",
+             "After you re-upload an avatar, its old parameter names no "
+             "longer linger in the list."),
+        ),
+    ),
+    Release(
         (1, 5),
         ("📱", "VRChat on a Quest or phone",
          "Playing on a Quest standalone or an Android phone? Turn on "

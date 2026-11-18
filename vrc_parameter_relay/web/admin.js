@@ -189,14 +189,21 @@ function catBox(cat) {
   return box;
 }
 
+// the avatar doesn't have this card's parameter (anymore): drawn grey
+const isMissing = (c) => ((S && S.missing) || []).includes(c.param);
+const MISSING_TIP = (c) => `${c.param} isn't on this avatar anymore.\nDrop a parameter ` +
+  "from the list onto this card, or use ⋯ → Change parameter…, to point it at another one.";
+
 function cardEl(c) {
   const el = document.createElement("div");
-  el.className = "card";
+  const missing = isMissing(c);
+  el.className = "card" + (missing ? " missing" : "");
   el.dataset.id = c.id;
+  if (missing) el.title = MISSING_TIP(c);
   el.innerHTML = `
     <div class="card-top">
       <span class="card-grip" draggable="true" title="Drag to move this control">⠿</span>
-      <span class="label" title="${esc(c.param)}">${esc(c.label || c.param)}</span>
+      <span class="label" title="${esc(missing ? MISSING_TIP(c) : c.param)}">${esc(c.label || c.param)}</span>
       ${c.invert ? '<span class="card-inv" title="Inverted">⇄</span>' : ""}
       ${isIntSwitch(c) ? `<span class="card-val" title="Sets ${esc(c.param)} to ${esc(c.on ?? 1)}, back to ${esc(c.off ?? 0)}">=${esc(c.on ?? 1)}</span>` : ""}
       <button class="card-menu" title="Edit or remove">⋯</button>
@@ -307,6 +314,7 @@ function paintParam(name) {
 // -- drag & drop ----------------------------------------------------------
 function clearGhosts() {
   document.querySelectorAll(".ghost-card, .ghost-cat").forEach((g) => g.remove());
+  document.querySelectorAll(".card.droptarget").forEach((c) => c.classList.remove("droptarget"));
 }
 function cardGhost() {
   const g = document.createElement("div");
@@ -366,6 +374,13 @@ document.addEventListener("dragover", (e) => {
     box.parentNode.insertBefore(g, after ? box.nextSibling : box);
     return;
   }
+  // a parameter over a grey card re-points that card instead
+  const grey = drag.kind === "param" && e.target.closest(".card.missing");
+  if (grey) {
+    if (!grey.classList.contains("droptarget")) { clearGhosts(); grey.classList.add("droptarget"); }
+    return;
+  }
+  document.querySelectorAll(".card.droptarget").forEach((c) => c.classList.remove("droptarget"));
   // card / parameter: preview the slot inside this category
   const grid = box.querySelector(".cat-grid");
   const idx = insertIndex(grid, e.clientX, e.clientY);
@@ -383,6 +398,13 @@ document.addEventListener("drop", (e) => {
   if (!box) { clearGhosts(); return; }
   e.preventDefault();
   const catId = box.dataset.cat;
+  const grey = drag.kind === "param" && e.target.closest(".card.missing");
+  if (grey) {
+    send("repoint_control", { id: grey.dataset.id, param: drag.param });
+    clearGhosts();
+    drag = null;
+    return;
+  }
 
   if (drag.kind === "cat") {
     if (catId !== drag.id) send("move_category", { cat: drag.id, target: catId });
@@ -474,6 +496,46 @@ function editControl(c) {
     send("update_control", { id: c.id, changes });
     modal.classList.add("hidden");
   };
+  $("modalCancel").onclick = () => modal.classList.add("hidden");
+}
+
+// ⋯ → Change parameter…: point a card at another parameter of the avatar.
+// For a grey card the filter starts on its name without the VRCFury tag, so
+// the renumbered candidates are on top.
+function pickParam(c) {
+  const missing = isMissing(c);
+  const base = c.param.replace(/^(?:VF\d+_)+/, "") || c.param;
+  const names = Object.keys(S.params || {}).filter((n) => n !== c.param)
+    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()) || a.localeCompare(b));
+  $("modalTitle").textContent = "Change parameter";
+  normalModal();
+  $("modalBody").innerHTML = `
+    <div class="pick-now">${missing ? `<b>${esc(c.param)}</b> isn't on this avatar anymore.`
+                                     : `Now: <b>${esc(c.param)}</b>`}</div>
+    <div class="pick-hint">The card keeps its label, category and values.</div>
+    <input type="search" id="mPick" class="filter pick-filter" placeholder="Filter parameters…">
+    <select id="mPickList" class="pick-list" size="12"></select>`;
+  const fill = () => {
+    const f = $("mPick").value.trim().toLowerCase();
+    const shown = names.filter((n) => !f || n.toLowerCase().includes(f));
+    $("mPickList").innerHTML = shown.map((n) =>
+      `<option value="${esc(n)}">${esc(n)}  (${esc(S.params[n].ptype)})</option>`).join("");
+    if (shown.length) $("mPickList").selectedIndex = 0;
+  };
+  $("mPick").value = missing ? base : "";
+  $("mPick").oninput = fill;
+  fill();
+  const modal = $("modal");
+  modal.classList.remove("hidden");
+  $("mPick").focus();
+  const ok = () => {
+    const param = $("mPickList").value;
+    if (!param) return;
+    send("repoint_control", { id: c.id, param });
+    modal.classList.add("hidden");
+  };
+  $("modalOk").onclick = ok;
+  $("mPickList").ondblclick = ok;
   $("modalCancel").onclick = () => modal.classList.add("hidden");
 }
 
@@ -689,6 +751,7 @@ document.addEventListener("click", (e) => {
     const c = (S.board.controls || []).find((x) => x.id === card.dataset.id);
     const items = [
       { text: "Edit…", run: () => editControl(c) },
+      { text: "Change parameter…", run: () => pickParam(c) },
       { sep: true },
       { text: "Remove", run: () => send("remove_control", { id: c.id }) },
     ];

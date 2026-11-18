@@ -633,6 +633,8 @@ class GuestServer:
                       "controls": core.board.get("controls", [])},
             "values": core.board_values(),
             "params": core.param_snapshot(),
+            # cards whose parameter the avatar doesn't have (drawn grey)
+            "missing": sorted(core.missing_params()),
             "sharing": core.sharing_enabled,
             "yolo": core.yolo_enabled,
             "guests": len(self._sockets),
@@ -770,6 +772,9 @@ class GuestServer:
             changes = {k: v for k, v in (data.get("changes") or {}).items()
                        if k in ("label", "kind", "min", "max", "invert", "on", "off")}
             core.update_control(str(arg("id")), **changes)
+        elif op == "repoint_control":
+            if not core.repoint_control(str(arg("id")), str(arg("param"))):
+                return "That parameter isn't on this avatar."
         elif op == "remove_control":
             core.remove_control(str(arg("id")))
         elif op == "move_control":
