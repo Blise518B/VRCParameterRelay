@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import subprocess
 import sys
 import threading
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__, resource_path, updater
+from .. import APP_NAME, AUTHOR, GITHUB_URL, __version__, debug_export, resource_path, updater
 from ..fixed_link import FixedLink
 from ..webserver import compose_public_url, normalize_public_url
 from .dialogs import ControlDialog, ParamPickerDialog, ShareDialog
@@ -1238,6 +1239,10 @@ On startup the app checks GitHub for a newer release. When there is one,
 and restarts into the new version — nothing is installed without that click,
 and your boards stay as they are. ⚙ Settings → <i>Check for updates now</i>
 asks again any time.</p>
+<p>Something not working right? ⚙ Settings → <i>Export debug log</i> saves a
+file to your Downloads folder with your avatar's parameters, your boards and
+settings (passwords and share links left out) — send it to whoever is helping
+you.</p>
 """
 
 
@@ -1438,9 +1443,59 @@ class SettingsDialog(QDialog):
         ul.addLayout(row)
         lay.addWidget(updates)
 
+        # -- bottom row: debug log + Close ------------------------------------
+        # (in the Close row, not a section of its own: one more section would
+        # squeeze the font list to a single row on a 1080p screen)
+        bottom = QHBoxLayout()
+        self.debug_btn = QPushButton("Export debug log")
+        self.debug_btn.setToolTip(
+            "Something not working right? Saves a file to your Downloads folder "
+            "with your avatar's parameters, your boards and settings — send it "
+            "to whoever is helping you. Passwords and share links are left out.")
+        self.debug_btn.clicked.connect(self._export_debug_log)
+        bottom.addWidget(self.debug_btn)
+        self.debug_result = QLabel("", objectName="SettingsHint")
+        bottom.addWidget(self.debug_result, 1)
         close = QPushButton("Close")
         close.clicked.connect(self.accept)
-        lay.addWidget(close, alignment=Qt.AlignRight)
+        bottom.addWidget(close)
+        lay.addLayout(bottom)
+        self._debug_exported.connect(self._on_debug_exported)
+
+    _debug_exported = Signal(str, str)  # saved path, error ("" = none)
+
+    def _export_debug_log(self) -> None:
+        """Save the debug log to Downloads (a worker thread: it asks VRChat's
+        OSCQuery for its current list, which can take a few seconds)."""
+        self.debug_btn.setEnabled(False)
+        self.debug_result.setText("Collecting…")
+        try:
+            path = _unique_path(_download_dir(), debug_export.file_name())
+        except OSError as exc:
+            self._on_debug_exported("", str(exc))
+            return
+        core = self.main.core
+
+        def worker() -> None:
+            try:
+                debug_export.export(core, path)
+            except Exception as exc:  # noqa: BLE001 — reported in the dialog
+                logging.getLogger(__name__).exception("debug log export failed")
+                self._debug_exported.emit("", f"{type(exc).__name__}: {exc}")
+                return
+            self._debug_exported.emit(str(path), "")
+
+        threading.Thread(target=worker, name="debug-export", daemon=True).start()
+
+    def _on_debug_exported(self, path: str, error: str) -> None:
+        self.debug_btn.setEnabled(True)
+        if not path:
+            self.debug_result.setText("Couldn't save it ✗")
+            self.debug_result.setToolTip(error)
+            return
+        self.debug_result.setText("Saved to Downloads ✓")
+        self.debug_result.setToolTip(path)
+        _reveal_file(Path(path))  # Explorer opens with the file selected
 
     def _check_updates(self) -> None:
         self.check_btn.setEnabled(False)

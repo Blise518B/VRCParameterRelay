@@ -67,6 +67,9 @@ unsigned exe — *More info → Run anyway*.
 - Cloudflare quick-tunnel links (Link settings) change when you restart the
   app; the fixed link doesn't
 - On Linux, use the AppImage from Releases
+- Something acting up? *⚙ Settings → Export debug log* saves a file to your
+  Downloads folder (parameters, boards, settings — passwords and share links
+  left out) that you can send along with a bug report
 
 ## From source
 
